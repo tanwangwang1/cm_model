@@ -15,7 +15,7 @@ from sklearn import cluster, datasets
 from sklearn.model_selection import train_test_split
 #from custom_dataset import CustomDataset
 import argparse
-import matplotlib.pyplot as plt
+import pandas as pd
 import os
 import time
 from sklearn.preprocessing import StandardScaler
@@ -72,59 +72,28 @@ def train(model,dataloader,criterion_cluster,optimizer,device,):
         loss.backward()
         optimizer.step()
     return cm_loss_list
-    # x_data = [i for i in range(len(cm_loss_list))]
-    # cm_loss_0 = [i[0] for i in cm_loss_list]
-    # cm_loss_1 = [i[1] for i in cm_loss_list]
-    # cm_loss_2 = [i[2] for i in cm_loss_list]
-    # cm_loss_3 = [i[3] for i in cm_loss_list]
-
-    # for i,j in zip(["loss_E1", "loss_E2", "loss_E3", "loss_E4"],[cm_loss_0,cm_loss_1, cm_loss_2,cm_loss_3]):
-    #     plt.plot(x_data, j, color='r', marker='x', label='Scatter Plot')
-    #     plot_title = f'{i}'
-    #     plt.title(plot_title)
-    #     plt.savefig(f'./loss_d0812/epoch_{i}.png', format='png', dpi=300)
-    #     plt.close()
-    #import pdb;pdb.set_trace()
 ####################################################################################
 ######################################################################################
 def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
              savepath=None,full=False,
              is_save=False, alpha=None, 
              centroids=None, c_alpha=None, 
-             temp=None, seed_=None):
+             temp=None, seed_=None,
+             cm_loss_list=None):
     model.eval()
     pred,lbl,x = [],[],None
     X_all = []
     y_all = []
     
-
-
     for i, (X, y) in enumerate(zip(*dataloader)):
         X_all += X.tolist()
         y_all.append(y)
 
         x = X.float().to(device)
         cm = model(x)
-        #cm_loss = criterion_cluster(cm, split=True).detach().cpu().numpy()
-        #import pdb;pdb.set_trace()
-        #cm_loss_list.append(cm_loss)
         _,gamma,_,_ = cm
         pred += gamma.argmax(-1).detach().cpu().tolist()
         lbl += y.cpu().flatten().tolist()
-
-    # x_data = [i for i in range(len(cm_loss_list))]
-    # cm_loss_0 = [i[0] for i in cm_loss_list]
-    # cm_loss_1 = [i[1] for i in cm_loss_list]
-    # cm_loss_2 = [i[2] for i in cm_loss_list]
-    # cm_loss_3 = [i[3] for i in cm_loss_list]
-    
-    # for i,j in zip(["loss_E1", "loss_E2", "loss_E3", "loss_E4"],[cm_loss_0,cm_loss_1, cm_loss_2,cm_loss_3]):
-    #     plt.plot(x_data, j, color='r', marker='x', label='Scatter Plot')
-    #     plot_title = f'{i}'
-    #     plt.title(plot_title)
-    #     plt.savefig(f'./loss_d0812/epoch_{epoch}_{i}.png', format='png', dpi=300)
-    #     plt.close()
-
     pred = np.array(pred)
     lbl = np.array(lbl).astype(int)
     cm_loss = criterion_cluster(cm, split=True).detach().cpu().numpy()
@@ -139,10 +108,6 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
     print('Loss:',a2s( cm_loss ), flush=True)
     import time
     if is_save:
-        # x_data = [i for i in range(len(cm_loss_list))]
-        # plt.plot(x_data, cm_loss_list, color='r', marker='x', label='Scatter Plot')
-        # plt.savefig(f'./loss/loss_a_{alpha}_c_alpha_{c_alpha}_t_{temp}.png', format='png', dpi=300)
-        # plt.close()
         save_path = savepath + f"/a_{alpha}_c_alpha_{c_alpha}_t_{temp}.png"
         silhouette_score_ = round(silhouette_score(X_all, pred), 3)
         davies_index = round(davies_bouldin_score(X_all, pred), 3)
@@ -155,10 +120,22 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
         homogeneity_score = round(homogeneity_score_[0], 3)
         completeness_score = round(homogeneity_score_[1],3)
         v_measure_score = round(homogeneity_score_[2],3)
-        import pandas as pd
-        csv_filename = f'/home/matteo/thesis_2/clustering_module/Example/d0805.csv'
 
-        if acc >= 1:
+        cm_loss_1 = np.array([i[0] for i in cm_loss_list])
+        cm_loss_2 = np.array([i[1] for i in cm_loss_list])
+        cm_loss_3 = np.array([i[2] for i in cm_loss_list])
+        cm_loss_4 = np.array([i[3] for i in cm_loss_list])
+        
+        std_loss_e1 = round(np.std(cm_loss_1),3)
+        std_loss_e2 = round(np.std(cm_loss_2),3)
+        std_loss_e3 = round(np.std(cm_loss_3),3)
+        std_loss_e4 = round(np.std(cm_loss_4),3)
+        
+        
+
+        csv_filename = f'/home/matteo/github/clustering_module/experiment_all_metric/all_center4.csv'
+
+        if acc >= 0:
 
             all_para = {"seed":seed_,
                         "alpha":alpha, 
@@ -171,12 +148,17 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
                         "normalized_score":normalized_score,
                         "homogeneity_score":homogeneity_score,
                         "completeness_score":completeness_score,
-                        "v_measure_score":v_measure_score}
+                        "v_measure_score":v_measure_score,
+                        "std_loss_e1": std_loss_e1,
+                        "std_loss_e2": std_loss_e2,
+                        "std_loss_e3": std_loss_e3,
+                        "std_loss_e4": std_loss_e4,}
             df_new = pd.DataFrame(all_para,index=[0])
             df_new.to_csv(csv_filename, mode='a', header=False, index=False)
             plot_predictions(pred[:],X_all,model._mu().detach().cpu().numpy(), save_path, alpha,c_alpha, centroids,temp,acc, 
                              silhouette_score_, davies_index, adjusted_score, 
-                             normalized_score, homogeneity_score, completeness_score, v_measure_score)
+                             normalized_score, homogeneity_score, completeness_score, v_measure_score,
+                             std_loss_e1,std_loss_e2,std_loss_e3,std_loss_e4)
     return pred, lbl, cm_loss
 
 def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
@@ -207,7 +189,8 @@ def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
 def plot_predictions(y_pred, X, C, save_path,alpha,c_alpha,centroids,temp,acc, 
                      silhouette_score_, davies_index, adjusted_score, 
                      normalized_score, homogeneity_score, completeness_score, 
-                     v_measure_score_):
+                     v_measure_score_,std_loss_e1,std_loss_e2,std_loss_e3,std_loss_e4 ):
+    
     colors = np.array(
         list(
             islice(
@@ -237,7 +220,9 @@ def plot_predictions(y_pred, X, C, save_path,alpha,c_alpha,centroids,temp,acc,
     plt.xticks(())
     plt.yticks(())
     plt.title(f'A:{alpha},  C:{centroids},  C_A:{c_alpha},   T:{temp},')
-    plt.text(0.5, -0.1, f'Acc:{acc}  Silhouette:{silhouette_score_}  Davies:{davies_index} Adjusted:{adjusted_score} \n Normalized:{normalized_score} Homogeneity:{homogeneity_score} Completeness: {completeness_score}V_measure:{v_measure_score_} ', ha='center', va='center', transform=plt.gca().transAxes)
+    plt.text(0.5, -0.08, f'Acc:{acc}  Silhouette:{silhouette_score_}  Davies:{davies_index} Adjusted:{adjusted_score} \n Normalized:{normalized_score} Homogeneity:{homogeneity_score} Completeness: {completeness_score}V_measure:{v_measure_score_} \n \
+             std(E1): {std_loss_e1:.3f} std(E2): {std_loss_e2:.3f} std(E3): {std_loss_e3:.3f} std(E4): {std_loss_e4:.3f}', 
+             ha='center', va='center', transform=plt.gca().transAxes)
     if save_path:
         plt.savefig(save_path)
     else:
@@ -255,7 +240,7 @@ def main(args):
     print(ALPHA)
     ######################################################################################
     n_samples = BATCH*100
-    X_train, y_train = datasets.make_blobs(n_samples=n_samples, centers=5, random_state=args.seed) # random_state = 170, 180
+    X_train, y_train = datasets.make_blobs(n_samples=n_samples, centers=4, random_state=args.seed) # random_state = 170, 180
     #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     X_train = StandardScaler().fit_transform(X_train)
@@ -283,7 +268,7 @@ def main(args):
     )
     cm_loss_list = []
     for epoch in range(EPOCH):
-        cm_loss_list += train(model=model,
+        cm_loss_list = train(model=model,
               dataloader=(X_train,y_train),
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
@@ -343,48 +328,12 @@ def main(args):
               centroids=args.centroids,
               c_alpha=args.c_alpha,
               temp=args.temperature,
-              seed_=args.seed
+              seed_=args.seed,
+              cm_loss_list=cm_loss_list
               )
     
-    x_data = [i for i in range(len(cm_loss_list))]
-    cm_loss_1 = np.array([i[0] for i in cm_loss_list])
-    cm_loss_2 = np.array([i[1] for i in cm_loss_list])
-    cm_loss_3 = np.array([i[2] for i in cm_loss_list])
-    cm_loss_4 = np.array([i[3] for i in cm_loss_list])
-    cm_loss_5 = cm_loss_1 + cm_loss_2
-    cm_loss_6 = cm_loss_1 + cm_loss_3
-    cm_loss_7 = cm_loss_2 + cm_loss_3
-    cm_loss_8 = cm_loss_1 + cm_loss_2 + cm_loss_3
-    # 创建包含8个子图的图形对象，并设置figsize
-    fig, axs = plt.subplots(8, 1, figsize=(12, 28))  # 调整figsize来适配8个子图
 
-    # 遍历并绘制每个子图
-    for s, (i, j) in enumerate(zip(
-        ["loss_E1", "loss_E2", "loss_E3", "loss_E4", "loss_E1 + loss_E2", "loss_E1 + loss_E3", "loss_E2 + loss_E3", "loss_E1 + loss_E2 + loss_E3"],
-        [cm_loss_1, cm_loss_2, cm_loss_3, cm_loss_4, cm_loss_5, cm_loss_6, cm_loss_7, cm_loss_8]
-    )):
-        axs[s].plot(x_data, j, color='r', label='Scatter Plot')
-        axs[s].set_title(i)
-        axs[s].legend()
-    fig.suptitle(f'A:{args.alpha} C:{args.centroids},  C_A:{args.c_alpha},   T:{args.temperature}', fontsize=16)
 
-    # 调整布局
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # rect 参数留出总标题的位置
-    # 调整布局
-    #plt.tight_layout()
-
-    # 保存图形
-    plt.savefig(f'./loss_d0815/{args.seed}_a_{args.alpha}_ca_{args.c_alpha}_t_{args.temperature}.png', format='png', dpi=300)
-    plt.close()
-    # for s,(i,j) in enumerate(zip(["loss_E1", "loss_E2", "loss_E3", "loss_E4", "loss_E1 + loss_E2", "loss_E1 + loss_E3", "loss_E2 + loss_E3", "loss_E1 + loss_E2 + loss_E3"],
-    #                              [cm_loss_1 ,cm_loss_2, cm_loss_3,cm_loss_4,cm_loss_5,cm_loss_6,cm_loss_7,cm_loss_8])):
-    #     plt.subplot(8,1,s+1,figsize=(12, 6))
-    #     plt.plot(x_data, j, color='r', label='Scatter Plot')
-    #     plot_title = f'{i}'
-    #     plt.title(plot_title)
-    #     plt.tight_layout()
-    # plt.savefig(f'./loss_d0813/{args.seed}_a_{args.alpha}_ca_{args.c_alpha}_t_{args.temperature}', format='png', dpi=300)
-    # plt.close()
 
 
 

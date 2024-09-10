@@ -15,24 +15,27 @@ from sklearn import cluster, datasets
 from sklearn.model_selection import train_test_split
 #from custom_dataset import CustomDataset
 import argparse
-import matplotlib.pyplot as plt
+import pandas as pd
 import os
-
+import time
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
 
 from itertools import cycle, islice
-
+import torch.nn.functional as F
 def parse_arguments():
     """
     build and analyse the parameters of command
     return the parser(parameter object)
     """
     parser = argparse.ArgumentParser(description="Blobs_example")
-    parser.add_argument("--Alpha",'-a',type=float,default=1.1,required=True,help='set the Alpha which must be more than 1.0')
-    parser.add_argument("--centroids",'-c',type=int, default=int, required=True, help='set the amount of centroids')
+    parser.add_argument("--alpha",'-a',type=float,default=1.1,required=True,help='set the Alpha which must be more than 1.0')
+    parser.add_argument("--centroids",'-c',type=int, default=5, help='set the amount of centroids')
     parser.add_argument("--save_path_image",'-o', type=str, default='./',help='the savepath of plots')
-    parser.add_argument("--c_alpha",'-ca',type=float, default=float, required=True, help='set the amount of centroids')
-    parser.add_argument("--save_path_image",'-o', type=str, default='./',help='the savepath of plots')
+    parser.add_argument("--c_alpha",'-ca',type=float, default=0.1, required=True, help='set the added alpha [0.1,1]')
+    parser.add_argument("--freq",'-f', type=int, default=1,help='set the frequent')
+    parser.add_argument("--seed",'-s', type=int, default=30,help='the random_state of blobs')
+    parser.add_argument("--temperature", '-t', type=float, default=5, help='set the temperature of softmax')
     args = parser.parse_args()
     return args
 
@@ -54,32 +57,43 @@ def i2s(array,p=3):
 def train(model,dataloader,criterion_cluster,optimizer,device,):
 
     model.train()
-
+    cm_loss_list = []
     for X, y in zip(*dataloader):
         X = X.float().to(device)
         cm = model(X)
+        with torch.no_grad():
+            cm_loss = criterion_cluster(cm, split=True).detach().cpu().numpy()
+        #import pdb;pdb.set_trace()
+            cm_loss_list.append(cm_loss)
         # loss_rc = criterion_reconst(X, tx)
         loss = criterion_cluster(cm)
         # compute gradient and do GD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,savepath,full=False,is_save=False, alpha=None, centroids=None):
+    return cm_loss_list
+####################################################################################
+######################################################################################
+def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
+             savepath=None,full=False,
+             is_save=False, alpha=None, 
+             centroids=None, c_alpha=None, 
+             temp=None, seed_=None,
+             cm_loss_list=None):
     model.eval()
     pred,lbl,x = [],[],None
     X_all = []
+    y_all = []
+    
     for i, (X, y) in enumerate(zip(*dataloader)):
         X_all += X.tolist()
-        if i == 0 or full:
-            x = X.float().to(device)
-            cm = model(x)
-            _,gamma,_,_ = cm
-            pred += gamma.argmax(-1).detach().cpu().tolist()
-            lbl += y.cpu().flatten().tolist()
+        y_all.append(y)
 
-            #break
-
+        x = X.float().to(device)
+        cm = model(x)
+        _,gamma,_,_ = cm
+        pred += gamma.argmax(-1).detach().cpu().tolist()
+        lbl += y.cpu().flatten().tolist()
     pred = np.array(pred)
     lbl = np.array(lbl).astype(int)
     cm_loss = criterion_cluster(cm, split=True).detach().cpu().numpy()
@@ -93,9 +107,9 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,savepath
 
     print('Loss:',a2s( cm_loss ), flush=True)
     import time
-    save_path = savepath + f"/a{alpha}c{centroids}.png"
     if is_save:
-        plot_predictions(pred[:],X_all,model._mu().detach().cpu().numpy(), save_path, alpha, centroids)
+        save_path = savepath + f"/seed_{seed_}_a_{alpha}_c_alpha_{c_alpha}_t_{temp}.png"
+        plot_predictions(pred[:],X_all,model._mu().detach().cpu().numpy(), save_path,seed=seed_)
     return pred, lbl, cm_loss
 
 def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
@@ -122,20 +136,8 @@ def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
     model.load_state_dict(weights)
 
 ######################################################################################
-# def plot_predictions(pred, save_path, alpha, centroids):
-#     plt.figure(figsize=(10, 5))
-#     #plt.scatter(pred, range(len(pred)), c=pred, cmap='viridis', marker='o', alpha=0.5)
-#     plt.scatter(X[:, 0], X[:, 1], s=10, color=colors[y_pred])
-#     plt.xlabel('Predicted Class')
-#     plt.ylabel('Index')
-#     plt.title(f'Alpha={alpha}, Centroids={centroids}')
-#     plt.colorbar(label='Class')
-#     if save_path:
-#         plt.savefig(save_path)
-#     else:
-#         plt.show()
 
-def plot_predictions(y_pred, X, C, save_path,alpha, centroids):
+def plot_predictions(y_pred, X, C, save_path, seed):
     colors = np.array(
         list(
             islice(
@@ -161,24 +163,12 @@ def plot_predictions(y_pred, X, C, save_path,alpha, centroids):
     X_1 = [row[1] for row in X]
     plt.scatter(X_0,X_1, s=10, color=colors[y_pred])
     plt.scatter(C[:,0],C[:,1], s=16, marker='s', color='k')
-    #plt.scatter(C[:,0],C[:,1], s=10, marker='s', color=colors[np.arange(centroids)])
-    # plt.xlim(-2.5, 2.5)
-    # plt.ylim(-2.5, 2.5)
     plt.axis('auto')
     plt.xticks(())
     plt.yticks(())
-    plt.title(f'Alpha={alpha}, Centroids={centroids}')
-    # plt.text(
-    #     0.99,
-    #     0.01,
-    #     (transform=plt.gca().transAxes,
-    #     size=15,
-    #     horizontalalignment="right",
-    # )
+    plt.title(f'seed:{seed}')
     if save_path:
         plt.savefig(save_path)
-    else:
-        plt.show()
 
 
 def main(args):
@@ -187,27 +177,17 @@ def main(args):
     EPOCH = 100
     # Parameters for normalized Loss
     BATCH = 100
-    ALPHA = args.Alpha  # modify
-    #ALPHA = np.array( ([args.Alpha]*(args.centroids//2)) + ([1]*(args.centroids-args.centroids//2) ))
-    # ALPHA = np.array( ([args.Alpha]*(args.centroids)))
-    # ALPHA = np.array( ([args.Alpha*2,args.Alpha,args.Alpha]) + ([1]*7 ))
+    ALPHA = args.alpha  # modify
     print("===============")
     print(ALPHA)
     ######################################################################################
     n_samples = BATCH*100
-    X_train, y_train = datasets.make_blobs(n_samples=n_samples, centers=5, random_state=110) # random_state = 170, 180
+    X_train, y_train = datasets.make_blobs(n_samples=n_samples, centers=5, random_state=args.seed) # random_state = 170, 180
     #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     X_train = StandardScaler().fit_transform(X_train)
-
-
     X_train,y_train = torch.tensor(X_train).reshape((len(X_train)//BATCH,BATCH,-1)),torch.tensor(y_train).reshape((len(X_train)//BATCH,BATCH,-1))
-#    X_test,y_test = torch.tensor(X_test).reshape((len(X_test)//100,100,-1)),torch.tensor(y_test).reshape((len(X_test)//100,100,-1))
 
-#    train_dataset = CustomDataset(X_train, y_train)#transform=transform
-#    test_dataset = CustomDataset(X_test, y_test)
-    train_loader = zip(X_train,y_train) #torch.utils.data.DataLoader(train_dataset, batch_size=8000, shuffle=True)
-#    test_loader = zip(X_test,y_test) #torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 
     # create model
@@ -228,67 +208,55 @@ def main(args):
         betas=(.9,.999),
         eps=1e-3
     )
-#    optimizer = torch.optim.SGD(
-#        model.parameters(),
-#        lr=1e-2,
-#        momentum=.9,
-#    )
+    # cm_loss_list = []
+    # for epoch in range(EPOCH):
+    #     cm_loss_list += train(model=model,
+    #           dataloader=(X_train,y_train),
+    #           criterion_cluster=criterion_cluster,
+    #           optimizer=optimizer,
+    #           device=device)
 
-    for epoch in range(EPOCH):
-        train(model=model,
-              dataloader=(X_train,y_train),
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              device=device)
+    #     if (epoch)%1 == 0:
+    #         print('.',end='\r')
+    #         pred,_,_ = evaluate(model=model,
+    #           dataloader=(X_train,y_train),
+    #           criterion_cluster=criterion_cluster,
+    #           optimizer=optimizer,
+    #           device=device,
+    #           epoch=epoch,
+    #           savepath=args.save_path_image,
+    #           full=False)
+    #         if (epoch+1)%10 == 0: 
+    #             with torch.no_grad(): 
+    #                 print(pred)
+    #                 freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
+    #                 freq = F.softmax(torch.tensor(freq), dim=-1)
+    #                 freq = freq.numpy()
+    #                 criterion_cluster.alpha = criterion_cluster.alpha*args.c_alpha + (torch.tensor(freq+1).float()*(1 - args.c_alpha)).to(device)
+    #                 print(criterion_cluster.alpha)
 
-        if (epoch)%1 == 0:
-            print('.',end='\r')
-            pred,_,_ = evaluate(model=model,
-              dataloader=(X_train,y_train),
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              device=device,
-              epoch=epoch,
-              savepath=args.save_path_image,
-              full=False,
-              is_save=False)
-            if (epoch+1)%10 == 0: 
-                with torch.no_grad(): 
-                    freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float)/len(pred)  
-                
-                    criterion_cluster.alpha = criterion_cluster.alpha*0 + torch.tensor(freq+1).float().to(device)
-                    print( criterion_cluster.alpha )
-    # torch.save({
-    #     'model_state_dict': model.state_dict(),
-    #     'optimizer_state_dict': optimizer.state_dict(),
-    #     'criterion_cluster': criterion_cluster.state_dict(),
-    # }, 'model_checkpoint.pth')
+    # evaluate(model=model,
+    #           dataloader=(X_train,y_train),
+    #           criterion_cluster=criterion_cluster,
+    #           optimizer=optimizer,
+    #           epoch=EPOCH,
+    #           device=device,
+    #           full=False)
+    # print('>>> End Training')
+    # evaluate(model=model,
+    #           dataloader=(X_train,y_train),
+    #           criterion_cluster=criterion_cluster,
+    #           optimizer=optimizer,
+    #           device=device,
+    #           full=True,
+    #           epoch=EPOCH,)
+    # print('>>> Average Epoch')
+    # avg_epoch(model=model,
+    #           dataloader=(X_train,y_train),
+    #           criterion_cluster=criterion_cluster,
+    #           optimizer=optimizer,
+    #           device=device)
 
-    evaluate(model=model,
-              dataloader=(X_train,y_train),
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              epoch=EPOCH,
-              savepath=args.save_path_image,
-              device=device,
-              full=False,
-              is_save=False)
-    print('>>> End Training')
-    evaluate(model=model,
-              dataloader=(X_train,y_train),
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              device=device,
-              savepath=args.save_path_image,
-              full=True,
-              epoch=EPOCH,
-              is_save=False)
-    print('>>> Average Epoch')
-    avg_epoch(model=model,
-              dataloader=(X_train,y_train),
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              device=device)
     evaluate(model=model,
               dataloader=(X_train,y_train),
               criterion_cluster=criterion_cluster,
@@ -298,8 +266,17 @@ def main(args):
               savepath=args.save_path_image,
               full=True,
               is_save=True,
-              alpha=args.Alpha,
-              centroids=args.centroids)
+              alpha=args.alpha,
+              centroids=args.centroids,
+              c_alpha=args.c_alpha,
+              temp=args.temperature,
+              seed_=args.seed,
+              cm_loss_list=None
+              )
+    
+
+
+
 
 
 
