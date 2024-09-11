@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import homogeneity_score as homog
-
+from torch.utils.data import Subset
 def accuracy(y_true, y_pred):
     assert y_pred.shape[0] == y_true.shape[0]
         
@@ -36,31 +36,60 @@ def i2s(array,p=3):
 
 ##########################################################################
 
-class AE_CM(nn.Module):
-  def __init__(self):
+class View(nn.Module):
+    def __init__(self, shape):
+        super().__init__()
+        self.shape = shape,  # extra comma
+
+    def forward(self, x):
+        return x.view(*self.shape)
+
+class CV_CM(nn.Module):
+  def __init__(self, LATENT):
     super().__init__()
 
+
     self.encoder = nn.Sequential(
-        nn.Linear(784, 500),
-        nn.LeakyReLU(.2),
-        nn.Linear(500, 500),
-        nn.LeakyReLU(.2),
-        nn.Linear(500, 2000),
-        nn.LeakyReLU(.2),
-        nn.Linear(2000, 10),
+        nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+
+        nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+
+        nn.Flatten(),
+
+        nn.Linear(7 * 7 * 64, LATENT*2),
+        # nn.Dropout(p=0.5),
+        nn.ReLU(),
+
+        nn.Linear(LATENT*2, LATENT)
     )
 
     self.decoder = nn.Sequential(
-        nn.Linear(10, 2000),
-        nn.LeakyReLU(.2),
-        nn.Linear(2000, 500),
-        nn.LeakyReLU(.2),
-        nn.Linear(500, 500),
-        nn.LeakyReLU(.2),
-        nn.Linear(500, 784),
+        nn.Linear(LATENT, 128),
+        nn.ReLU(),
+
+        nn.Linear(128, 7 * 7 * 64),
+
+        View((-1,64,7,7)),
+
+        nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        #
+        nn.UpsamplingBilinear2d(scale_factor=2),
+        #
+
+        nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.UpsamplingBilinear2d(scale_factor=2),
+        #
+
+        nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
     )
-    
-    self.cm = Clustering_Module( 10, 10, False)
+
+    self.cm = Clustering_Module( LATENT, 5, False)
 
   def forward(self, x):
     z = self.encoder(x)
@@ -96,25 +125,36 @@ print( BATCH, ALPHA, BETA, LBD )
 
 torch.cuda.set_device(0)
 
+def filter_by_labels(dataset, labels):
+    indices = [i for i, (_, label) in enumerate(dataset) if label in labels]
+    return Subset(dataset, indices)
+
+# Define which digits to keep
+allowed_labels = set(range(5))
+
 # load data
 train_dataset = datasets.MNIST(
     'mnist', 
     train=True,
     transform=transforms.Compose([
         transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.view((784)) )
+        transforms.Normalize((0.5,), (0.5,) )
     ]),
-    download=True,
+    download=False,
 )
 test_dataset = datasets.MNIST(
     'mnist', 
     train=False,
     transform=transforms.Compose([
         transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.view((784)) )
+        transforms.Normalize((0.5,), (0.5,) )
     ]),
-    download=True,
+    download=False,
 )
+
+train_dataset = filter_by_labels(train_dataset, allowed_labels)
+test_dataset = filter_by_labels(test_dataset, allowed_labels)
+
 
 train_loader = torch.utils.data.DataLoader(
     train_dataset,
@@ -133,14 +173,14 @@ test_loader = torch.utils.data.DataLoader(
 
     
 # create model
-model = AE_CM().cuda(0)
+model = CV_CM(2).cuda(0)
 
 criterion_reconst = nn.MSELoss(reduction=('mean')).cuda(0)
 criterion_cluster = Clustering_Module_Loss(
-                        num_clusters=10, 
+                        num_clusters=5, 
                         alpha=ALPHA, 
-                        lbd=LBD, 
-                        orth=True, 
+                        lbd=0,  # lbd == 0 
+                        orth=False, # True ==> False 
                         normalize=True).cuda(0)
 
 optim_params = model.parameters()
