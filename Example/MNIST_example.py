@@ -16,6 +16,7 @@ warnings.filterwarnings('ignore')
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
+BETA = 100.
 def accuracy(y_true, y_pred):
     assert y_pred.shape[0] == y_true.shape[0]
         
@@ -89,7 +90,7 @@ class CV_CM(nn.Module):
         nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
     )
 
-    self.cm = Clustering_Module( LATENT, 5, False)
+    self.cm = Clustering_Module(LATENT, 5, False)
 
   def forward(self, x):
     z = self.encoder(x)
@@ -98,109 +99,22 @@ class CV_CM(nn.Module):
 
     return tx, cm
 
-
 ######################################################################################
 
-
-EPOCH = 100
-
-"""
-# Parameters for non-normalized Loss
-BATCH = 500
-ALPHA = 230
-BETA = 5.
-LBD = 1.
-"""
-
-# Parameters for normalized Loss
-BATCH = 256
-ALPHA = 1.1
-BETA = 100.
-LBD = .1
-
-print( BATCH, ALPHA, BETA, LBD )
-
-
-######################################################################################
-
-torch.cuda.set_device(0)
-
-def filter_by_labels(dataset, labels):
-    indices = [i for i, (_, label) in enumerate(dataset) if label in labels]
-    return Subset(dataset, indices)
-
-# Define which digits to keep
-allowed_labels = set(range(5))
-
-# load data
-train_dataset = datasets.MNIST(
-    'mnist', 
-    train=True,
-    transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,) )
-    ]),
-    download=False,
-)
-test_dataset = datasets.MNIST(
-    'mnist', 
-    train=False,
-    transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,) )
-    ]),
-    download=False,
-)
-
-train_dataset = filter_by_labels(train_dataset, allowed_labels)
-test_dataset = filter_by_labels(test_dataset, allowed_labels)
-
-
-train_loader = torch.utils.data.DataLoader(
-    train_dataset,
-    shuffle=True, 
-    batch_size=BATCH, 
-    num_workers=8, 
-    drop_last=False
-) #, pin_memory=True)
-
-test_loader = torch.utils.data.DataLoader(
-    test_dataset, 
-    batch_size=max(BATCH,1024), 
-    num_workers=8, 
-    drop_last=False
-) #, pin_memory=True)
-
-    
-# create model
-model = CV_CM(2).cuda(0)
-
-criterion_reconst = nn.MSELoss(reduction=('mean')).cuda(0)
-criterion_cluster = Clustering_Module_Loss(
-                        num_clusters=5, 
-                        alpha=ALPHA, 
-                        lbd=0,  # lbd == 0 
-                        orth=False, # True ==> False 
-                        normalize=True).cuda(0)
-
-optim_params = model.parameters()
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=1e-3, 
-    betas=(.9,.999), 
-    eps=1e-3 
-)
-
-
-######################################################################################
-
-def train():
+def train(
+        model,
+        dataloader,
+        criterion_cluster,
+        optimizer,
+        criterion_reconst,
+        device
+        ):
     # switch to train mode
     model.train()
     
-    for i, (images, _) in enumerate(train_loader):
+    for i, (images, _) in enumerate(dataloader):
 
-        images = images.cuda(0, non_blocking=True)
+        images = images.to(device)
 
         # compute output and loss
         tx, cm = model(x=images)
@@ -213,13 +127,21 @@ def train():
         loss.backward()
         optimizer.step()
 
-def evaluate(full=False):
+def evaluate(model,
+              dataloader,
+              criterion_cluster,
+              optimizer,
+              device,
+              epoch,
+              criterion_reconst,
+              full=True,
+              ):
     model.eval()
 
     pred,lbl,img = [],[],None
-    for i, (images, labels) in enumerate(train_loader):
+    for i, (images, labels) in enumerate(dataloader):
         if i == 0 or full:
-            img = images.cuda(0, non_blocking=True)
+            img = images.to(device)
             tx, cm = model(img)
             _,gamma,_,_ = cm
             pred += gamma.argmax(-1).detach().cpu().tolist()
@@ -246,16 +168,21 @@ def evaluate(full=False):
     
     return pred, lbl, cm_loss, rc_loss
 
-def avg_epoch():
+def avg_epoch(model,
+              dataloader,
+              criterion_cluster,
+              optimizer,
+              criterion_reconst,
+              device):
     weights = {}
     for k in model.state_dict():
         weights[k] = model.state_dict()[k].detach()
     # switch to train mode
     model.train()
     
-    for i, (images, _) in enumerate(train_loader):
+    for i, (images, _) in enumerate(dataloader):
 
-        images = images.cuda(0, non_blocking=True)
+        images = images.to(device)
 
         # compute output and loss
         tx, cm = model(x=images)
@@ -273,20 +200,161 @@ def avg_epoch():
             
     model.load_state_dict(weights)
 
-######################################################################################
 
-for epoch in range(EPOCH):
-    train()
-    
-    if (epoch)%10 == 0:
-        print('.',end='\r')
-        evaluate(full=False)
-    if (epoch)%50 == 0:
-        print( BATCH, ALPHA, BETA, LBD )
 
-evaluate(full=False)
-print('>>> End Training')
-evaluate(full=True)
-print('>>> Average Epoch')
-avg_epoch()
-evaluate(full=True)
+def filter_by_labels(dataset, labels):
+    indices = [i for i, (_, label) in enumerate(dataset) if label in labels]
+    return Subset(dataset, indices)
+def main():
+    EPOCH = 100
+
+    """
+    # Parameters for non-normalized Loss
+    BATCH = 500
+    ALPHA = 230
+    BETA = 5.
+    LBD = 1.
+    """
+
+    # Parameters for normalized Loss
+    BATCH = 1024
+    ALPHA = 1.1
+    BETA = 100.
+    LBD = .1
+
+    print( BATCH, ALPHA, BETA, LBD )
+    ######################################################################################
+    torch.cuda.set_device(0)
+
+
+
+    # Define which digits to keep
+    allowed_labels = set(range(5))
+
+    # load data
+    train_dataset = datasets.MNIST(
+        'mnist', 
+        train=True,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,) )
+        ]),
+        download=False,
+    )
+    test_dataset = datasets.MNIST(
+        'mnist', 
+        train=False,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,) )
+        ]),
+        download=False,
+    )
+
+    train_dataset = filter_by_labels(train_dataset, allowed_labels)
+    test_dataset = filter_by_labels(test_dataset, allowed_labels)
+
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        shuffle=True, 
+        batch_size=BATCH, 
+        num_workers=8, 
+        drop_last=False
+    ) #, pin_memory=True)
+
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, 
+        batch_size=max(BATCH,1024), 
+        num_workers=8, 
+        drop_last=False
+    ) #, pin_memory=True)
+################################################################################
+    # create model
+    model = CV_CM(2).cuda(0)
+
+    criterion_reconst = nn.MSELoss(reduction=('mean')).cuda(0)
+    criterion_cluster = Clustering_Module_Loss(
+                            num_clusters=5, 
+                            alpha=ALPHA, 
+                            lbd=0,  # lbd == 0 
+                            orth=False, # True ==> False 
+                            normalize=True).cuda(0)
+
+    optim_params = model.parameters()
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-3, 
+        betas=(.9,.999), 
+        eps=1e-3 
+    )
+
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    ######################################################################################
+
+    for epoch in range(EPOCH):
+        train(model=model,
+              dataloader=train_loader,
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              criterion_reconst=criterion_reconst,
+              device=device)
+        
+        if (epoch)%10 == 0:
+            print('.',end='\r')
+            evaluate(model=model,
+                        dataloader=train_loader,
+                        criterion_cluster=criterion_cluster,
+                        optimizer=optimizer,
+                        device=device,
+                        epoch=epoch,
+                        criterion_reconst = criterion_reconst,
+                        full=False)
+        if (epoch)%50 == 0:
+            print( BATCH, ALPHA, BETA, LBD )
+            # with torch.no_grad(): 
+            #     print(pred)
+            #     # freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
+            #     # freq = F.softmax(torch.tensor(freq), dim=-1)
+            #     # freq = freq.numpy()
+            #     # criterion_cluster.alpha = criterion_cluster.alpha*args.c_alpha + (torch.tensor(freq+1).float()*(1 - args.c_alpha)).to(device)
+            #     # print(criterion_cluster.alpha)
+
+    evaluate(model=model,
+              dataloader=train_loader,
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              epoch=EPOCH,
+              criterion_reconst = criterion_reconst,
+              device=device,
+              full=False)
+    print('>>> End Training')
+    evaluate(model=model,
+              dataloader=train_loader,
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              criterion_reconst = criterion_reconst,
+              device=device,
+              full=True,
+              epoch=EPOCH)
+    print('>>> Average Epoch')
+    avg_epoch(model=model,
+              dataloader=train_loader,
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              criterion_reconst = criterion_reconst,
+              device=device)
+    evaluate(model=model,
+              dataloader=train_loader,
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              criterion_reconst = criterion_reconst,
+              device=device,
+              epoch=EPOCH,
+              full=True,
+              )
+
+
+
+if __name__=='__main__':
+    main()
