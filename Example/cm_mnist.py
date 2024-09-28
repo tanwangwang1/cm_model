@@ -1,5 +1,5 @@
 import os,sys,time,copy
-#os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[-1] if sys.argv[-1].isdigit() else '0'
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'#sys.argv[-1] if sys.argv[-1].isdigit() else '0'
 
 import numpy as np
 import torch
@@ -26,10 +26,10 @@ def parse_arguments():
     return the parser(parameter object)
     """
     parser = argparse.ArgumentParser(description="Mnist_example")
-    parser.add_argument("--alpha",'-a',type=float,default=1.1,help='set the alpha which must be more than 1.0')
-    parser.add_argument("--centroids",'-c',type=int, default=5, help='set the amount of centroids')
+    parser.add_argument("--alpha",'-a',type=float,default=1.04,help='set the alpha which must be more than 1.0')
+    parser.add_argument("--centroids",'-c',type=int, default=10, help='set the amount of centroids')
     parser.add_argument("--new_alpha",'-n',type=float, default=0.1, help='set the added alpha [0.1,1], rename as new_alpha')
-    parser.add_argument("--temperature", '-t', type=float, default=5, help='set the temperature of softmax')
+    parser.add_argument("--temperature", '-t', type=float, default=10, help='set the temperature of softmax')
     parser.add_argument("--save_csv",'-o', type=str, default='./',help='the savepath of csv')
     args = parser.parse_args()
     return args
@@ -64,7 +64,7 @@ class View(nn.Module):
         return x.view(*self.shape)
 
 class CV_CM(nn.Module):
-  def __init__(self, LATENT):
+  def __init__(self, LATENT,N_CLUSTER):
     super().__init__()
 
 
@@ -79,11 +79,11 @@ class CV_CM(nn.Module):
 
         nn.Flatten(),
 
-        nn.Linear(7 * 7 * 64, LATENT*2),
+        nn.Linear(7 * 7 * 64, 128),
         # nn.Dropout(p=0.5),
         nn.ReLU(),
 
-        nn.Linear(LATENT*2, LATENT)
+        nn.Linear(128, LATENT)
     )
 
     self.decoder = nn.Sequential(
@@ -108,7 +108,7 @@ class CV_CM(nn.Module):
         nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
     )
 
-    self.cm = Clustering_Module(LATENT, 5, False)
+    self.cm = Clustering_Module(LATENT, N_CLUSTER, False)
 
   def forward(self, x):
     z = self.encoder(x)
@@ -168,13 +168,13 @@ def evaluate(
     for i, (images, labels) in enumerate(dataloader):
         #import pdb;pdb.set_trace()
         X_all += images
-        if i == 0 or full:
-            img = images.to(device)
-            tx, cm = model(img)
-            _,gamma,_,_ = cm
-            pred += gamma.argmax(-1).detach().cpu().tolist()
-            lbl += labels.cpu().tolist()
-            break
+        # if i == 0 or full:
+        img = images.to(device)
+        tx, cm = model(img)
+        _,gamma,_,_ = cm
+        pred += gamma.argmax(-1).detach().cpu().tolist()
+        lbl += labels.cpu().tolist()
+            #break
     
     pred = np.array(pred)
     lbl = np.array(lbl).astype(int)
@@ -184,22 +184,31 @@ def evaluate(
     
     c_lr =  optimizer.param_groups[0]["lr"]
         
-    print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
-            epoch+1, 
-            c_lr,
-            accuracy( lbl, pred )*100,
-            homog( lbl, pred )*100,
-        ), flush=True, end='\t')
+    # print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
+    #         epoch+1, 
+    #         c_lr,
+    #         accuracy( lbl, pred )*100,
+    #         homog( lbl, pred )*100,
+    #     ), flush=True, end='\t')
         
-    print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
-    print('Loss:',a2s( cm_loss ), flush=True)
+    # print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
+    # print('Loss:',a2s( cm_loss ), flush=True)
     #import pdb;pdb.set_trace()
 #######################################################################################
     if is_save:
-        import pdb;pdb.set_trace()
-        X_all_np = np.array([x.flatten().numpy() for x in X_all])
-        silhouette_score_ = round(silhouette_score(X_all_np, pred), 3)
-        import pdb;pdb.set_trace()
+        print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
+                epoch+1, 
+                c_lr,
+                accuracy( lbl, pred )*100,
+                homog( lbl, pred )*100,
+            ), flush=True, end='\t')
+            
+        print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
+        print('Loss:',a2s( cm_loss ), flush=True)
+        # import pdb;pdb.set_trace()
+        # X_all_np = np.array([x.flatten().numpy() for x in X_all])
+        # silhouette_score_ = round(silhouette_score(X_all_np, pred), 3)
+        # import pdb;pdb.set_trace()
         # davies_index = round(davies_bouldin_score(X_all, pred), 3)
         # acc = round(accuracy( lbl, pred )*100,1)
         # labels_true= np.array([tensor.numpy().flatten() for tensor in y_all])
@@ -245,15 +254,11 @@ def avg_epoch(model,
     model.load_state_dict(weights)
 
 
-
-def filter_by_labels(dataset, labels):
-    indices = [i for i, (_, label) in enumerate(dataset) if label in labels]
-    return Subset(dataset, indices)
 def main(args):
     EPOCH = 100
     # Parameters for normalized Loss
     BATCH = 2048
-    BETA = 100.
+    BETA = 500.
     LBD = .1
 
     print( BATCH, args.alpha, BETA, LBD )
@@ -261,9 +266,8 @@ def main(args):
     #torch.cuda.set_device(0)
 
 
-
     # Define which digits to keep
-    allowed_labels = set(range(5))
+    #allowed_labels = set(range(5))
 
     # load data
     train_dataset = datasets.MNIST(
@@ -285,8 +289,8 @@ def main(args):
         download=False,
     )
 
-    train_dataset = filter_by_labels(train_dataset, allowed_labels)
-    test_dataset = filter_by_labels(test_dataset, allowed_labels)
+    # train_dataset = filter_by_labels(train_dataset, allowed_labels)
+    # test_dataset = filter_by_labels(test_dataset, allowed_labels)
 
 
     train_loader = torch.utils.data.DataLoader(
@@ -308,22 +312,22 @@ def main(args):
     # create model
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    model = CV_CM(2).to(device)
+    model = CV_CM(10,args.centroids).to(device)
 
     criterion_reconst = nn.MSELoss(reduction=('mean')).to(device)
     criterion_cluster = Clustering_Module_Loss(
                             num_clusters=args.centroids, 
                             alpha=args.alpha, 
-                            lbd=0,  # lbd == 0 
-                            orth=False, # True ==> False 
+                            lbd=1e-4,  # lbd == 0 
+                            orth=True, # True ==> False 
                             normalize=True).to(device)
 
     optim_params = model.parameters()
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=1e-3, 
-        betas=(.9,.999), 
-        eps=1e-3 
+        # betas=(.9,.999), 
+        # eps=1e-3 
     )
 
     
@@ -347,14 +351,14 @@ def main(args):
                                 epoch=epoch,
                                 criterion_reconst = criterion_reconst,
                                 full=False)
-            if (epoch + 1)%10 == 0:
+            if epoch > 50 and (epoch + 1)%10 == 0:
                 with torch.no_grad(): 
-                    print(pred)
+                    # print(pred)
                     freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
                     freq = F.softmax(torch.tensor(freq), dim=-1)
                     freq = freq.numpy()
                     criterion_cluster.alpha = criterion_cluster.alpha*args.new_alpha + (torch.tensor(freq+1).float()*(1 - args.new_alpha)).to(device)
-                    print(criterion_cluster.alpha)
+                    # print(criterion_cluster.alpha)
 
     evaluate(model=model,
               dataloader=test_loader,
