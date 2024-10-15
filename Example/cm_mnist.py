@@ -9,7 +9,7 @@ import torchvision.datasets as datasets
 import torch.nn.functional as F
 
 from lib_CM import *
-
+from cv_cm import *
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -19,7 +19,7 @@ from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
 import argparse
 from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
-BETA = 100.
+BETA = 500.
 def parse_arguments():
     """
     build and analyse the parameters of command
@@ -27,9 +27,9 @@ def parse_arguments():
     """
     parser = argparse.ArgumentParser(description="Mnist_example")
     parser.add_argument("--alpha",'-a',type=float,default=1.04,help='set the alpha which must be more than 1.0')
-    parser.add_argument("--centroids",'-c',type=int, default=10, help='set the amount of centroids')
-    parser.add_argument("--new_alpha",'-n',type=float, default=0.1, help='set the added alpha [0.1,1], rename as new_alpha')
-    parser.add_argument("--temperature", '-t', type=float, default=10, help='set the temperature of softmax')
+    parser.add_argument("--centroids",'-c',type=int, default=20, help='set the amount of centroids')
+    parser.add_argument("--new_alpha",'-n',type=float, default=.10, help='set the added alpha [0.1,1], rename as new_alpha')
+    parser.add_argument("--temperature", '-t', type=float, default=2000, help='set the temperature of softmax')
     parser.add_argument("--save_csv",'-o', type=str, default='./',help='the savepath of csv')
     args = parser.parse_args()
     return args
@@ -51,74 +51,7 @@ def a2s(array,p=3):
 
 def i2s(array,p=3): 
     return str( [str(x) for x in array] )[1:-1].replace("'",'') 
-
-
 ##########################################################################
-
-class View(nn.Module):
-    def __init__(self, shape):
-        super().__init__()
-        self.shape = shape,  # extra comma
-
-    def forward(self, x):
-        return x.view(*self.shape)
-
-class CV_CM(nn.Module):
-  def __init__(self, LATENT,N_CLUSTER):
-    super().__init__()
-
-
-    self.encoder = nn.Sequential(
-        nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-
-        nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-
-        nn.Flatten(),
-
-        nn.Linear(7 * 7 * 64, 128),
-        # nn.Dropout(p=0.5),
-        nn.ReLU(),
-
-        nn.Linear(128, LATENT)
-    )
-
-    self.decoder = nn.Sequential(
-        nn.Linear(LATENT, 128),
-        nn.ReLU(),
-
-        nn.Linear(128, 7 * 7 * 64),
-
-        View((-1,64,7,7)),
-
-        nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        #
-        nn.UpsamplingBilinear2d(scale_factor=2),
-        #
-
-        nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.UpsamplingBilinear2d(scale_factor=2),
-        #
-
-        nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
-    )
-
-    self.cm = Clustering_Module(LATENT, N_CLUSTER, False)
-
-  def forward(self, x):
-    z = self.encoder(x)
-    tx = self.decoder(z)
-    cm = self.cm(z) # NxC, NxK, NxC, KxC
-
-    return tx, cm
-
-######################################################################################
-
 def train(
         model,
         dataloader,
@@ -129,7 +62,7 @@ def train(
         ):
     # switch to train mode
     model.train()
-    
+
     for i, (images, _) in enumerate(dataloader):
 
         images = images.to(device)
@@ -164,17 +97,15 @@ def evaluate(
     model.eval()
 
     pred,lbl,img = [],[],None
-    X_all = []
     for i, (images, labels) in enumerate(dataloader):
         #import pdb;pdb.set_trace()
-        X_all += images
-        # if i == 0 or full:
-        img = images.to(device)
-        tx, cm = model(img)
-        _,gamma,_,_ = cm
-        pred += gamma.argmax(-1).detach().cpu().tolist()
-        lbl += labels.cpu().tolist()
-            #break
+        if i == 0 or full:
+            img = images.to(device)
+            tx, cm = model(img)
+            _,gamma,_,_ = cm
+            pred += gamma.argmax(-1).detach().cpu().tolist()
+            lbl += labels.cpu().tolist()
+            break
     
     pred = np.array(pred)
     lbl = np.array(lbl).astype(int)
@@ -184,40 +115,15 @@ def evaluate(
     
     c_lr =  optimizer.param_groups[0]["lr"]
         
-    # print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
-    #         epoch+1, 
-    #         c_lr,
-    #         accuracy( lbl, pred )*100,
-    #         homog( lbl, pred )*100,
-    #     ), flush=True, end='\t')
+    print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
+            epoch+1, 
+            c_lr,
+            accuracy( lbl, pred )*100,
+            homog( lbl, pred )*100,
+        ), flush=True, end='\t')
         
-    # print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
-    # print('Loss:',a2s( cm_loss ), flush=True)
-    #import pdb;pdb.set_trace()
-#######################################################################################
-    if is_save:
-        print('Epoch: [{:d}]\tlr: {:.6f}\taccuracy: {:.1f}\thomog: {:.1f}'.format( 
-                epoch+1, 
-                c_lr,
-                accuracy( lbl, pred )*100,
-                homog( lbl, pred )*100,
-            ), flush=True, end='\t')
-            
-        print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
-        print('Loss:',a2s( cm_loss ), flush=True)
-        # import pdb;pdb.set_trace()
-        # X_all_np = np.array([x.flatten().numpy() for x in X_all])
-        # silhouette_score_ = round(silhouette_score(X_all_np, pred), 3)
-        # import pdb;pdb.set_trace()
-        # davies_index = round(davies_bouldin_score(X_all, pred), 3)
-        # acc = round(accuracy( lbl, pred )*100,1)
-        # labels_true= np.array([tensor.numpy().flatten() for tensor in y_all])
-        # adjusted_score = round(adjusted_rand_score(labels_true.flatten(), pred),3)
-        # normalized_score  = round(normalized_mutual_info_score(labels_true.flatten(), pred), 3)
-        # homogeneity_score_ = homogeneity_completeness_v_measure(labels_true.flatten(), pred)
-        # homogeneity_score = round(homogeneity_score_[0], 3)
-        # completeness_score = round(homogeneity_score_[1],3)
-        # v_measure_score = round(homogeneity_score_[2],3)
+    print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
+    print('Loss:',a2s( cm_loss ), flush=True)
     
     return pred, lbl, cm_loss, rc_loss
 
@@ -340,7 +246,7 @@ def main(args):
               optimizer=optimizer,
               criterion_reconst=criterion_reconst,
               device=device)
-        
+
         if (epoch)%1 == 0:
             print('.',end='\r')
             pred,_,_,_ = evaluate(model=model,
@@ -351,14 +257,19 @@ def main(args):
                                 epoch=epoch,
                                 criterion_reconst = criterion_reconst,
                                 full=False)
-            if epoch > 50 and (epoch + 1)%10 == 0:
+            if epoch > 10 and (epoch + 1)%10 == 0:
                 with torch.no_grad(): 
                     # print(pred)
+                    print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
                     freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
                     freq = F.softmax(torch.tensor(freq), dim=-1)
                     freq = freq.numpy()
-                    criterion_cluster.alpha = criterion_cluster.alpha*args.new_alpha + (torch.tensor(freq+1).float()*(1 - args.new_alpha)).to(device)
-                    # print(criterion_cluster.alpha)
+                    criterion_cluster.alpha = (criterion_cluster.alpha-1)*args.new_alpha 
+                    criterion_cluster.alpha += (torch.tensor(freq+1).float()*(1 - args.new_alpha)).to(device)
+                    #criterion_cluster.alpha = torch.clamp(criterion_cluster.alpha, min=1.01)
+                    print(criterion_cluster.alpha)
+                    #criterion_cluster.alpha = 1-criterion_cluster.alpha
+                    #print(criterion_cluster.alpha)
 
     evaluate(model=model,
               dataloader=test_loader,
@@ -398,7 +309,6 @@ def main(args):
             centroids=args.centroids, 
             new_alpha=args.new_alpha, 
             temp=args.temperature,
-            cm_loss_list=None
             )
 
 

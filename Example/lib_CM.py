@@ -75,14 +75,14 @@ class Clustering_Module_Loss(nn.Module):
             gu = gu * self.mask
             loss_E3 = - torch.sum( gu ) / nd
         
-        lmg = torch.log( torch.mean(g,0) +1e-10 )
+        lmg = torch.log( torch.mean(g,0) +1e-10 )  # g: [0, 1] ==> log(torch.mean(g,0)) must be negative
         # Use this if alpha are not all the same
         # lmg = torch.sort(lmg).values
-        loss_E4 = lmg
-    
+        loss_E4 = lmg  # loss_E4 is negative 
         if split:
             nd  = 1. if self.normalize else n*d
-            return torch.stack( (loss_E1/nd, loss_E2/nd, loss_E3/(1 if self.orth else nd) , torch.sum(loss_E4* (1-self.alpha))))
+            return torch.stack( (loss_E1/nd, loss_E2/nd, loss_E3/(1 if self.orth else nd) , torch.sum(loss_E4* (1-self.alpha))))  
+                                                                                    # if self.alpha < 1, the E4 will be negative, falsch, wrong, 
             
         else:
             return loss_E1 + loss_E2 + loss_E3 + torch.sum( loss_E4 * (1-self.alpha) )
