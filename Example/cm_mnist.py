@@ -19,7 +19,7 @@ from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
 import argparse
 from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
-BETA = 500.
+BETA = 200.
 def parse_arguments():
     """
     build and analyse the parameters of command
@@ -28,8 +28,8 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Mnist_example")
     parser.add_argument("--alpha",'-a',type=float,default=1.04,help='set the alpha which must be more than 1.0')
     parser.add_argument("--centroids",'-c',type=int, default=20, help='set the amount of centroids')
-    parser.add_argument("--new_alpha",'-n',type=float, default=.10, help='set the added alpha [0.1,1], rename as new_alpha')
-    parser.add_argument("--temperature", '-t', type=float, default=2000, help='set the temperature of softmax')
+    parser.add_argument("--new_alpha",'-n',type=float, default=.1, help='set the added alpha [0.1,1], rename as new_alpha')
+    parser.add_argument("--temperature", '-t', type=float, default=40, help='set the temperature of softmax')
     parser.add_argument("--save_csv",'-o', type=str, default='./',help='the savepath of csv')
     args = parser.parse_args()
     return args
@@ -161,10 +161,10 @@ def avg_epoch(model,
 
 
 def main(args):
-    EPOCH = 100
+    EPOCH = 200
     # Parameters for normalized Loss
-    BATCH = 2048
-    BETA = 500.
+    BATCH = 512
+    BETA = 200.
     LBD = .1
 
     print( BATCH, args.alpha, BETA, LBD )
@@ -257,19 +257,19 @@ def main(args):
                                 epoch=epoch,
                                 criterion_reconst = criterion_reconst,
                                 full=False)
-            if epoch > 10 and (epoch + 1)%10 == 0:
+            if epoch > 100 and (epoch + 1)%10 == 0:
                 with torch.no_grad(): 
                     # print(pred)
                     print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
                     freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
                     freq = F.softmax(torch.tensor(freq), dim=-1)
                     freq = freq.numpy()
-                    criterion_cluster.alpha = (criterion_cluster.alpha-1)*args.new_alpha 
-                    criterion_cluster.alpha += (torch.tensor(freq+1).float()*(1 - args.new_alpha)).to(device)
+                    criterion_cluster.alpha = (criterion_cluster.alpha-1)*(1-args.new_alpha) 
+                    criterion_cluster.alpha += (torch.tensor(freq).float()*args.new_alpha).to(device)
+                    criterion_cluster.alpha += 1
                     #criterion_cluster.alpha = torch.clamp(criterion_cluster.alpha, min=1.01)
                     print(criterion_cluster.alpha)
-                    #criterion_cluster.alpha = 1-criterion_cluster.alpha
-                    #print(criterion_cluster.alpha)
+
 
     evaluate(model=model,
               dataloader=test_loader,
