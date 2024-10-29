@@ -28,12 +28,11 @@ def parse_arguments():
     return the parser(parameter object)
     """
     parser = argparse.ArgumentParser(description="Blobs_example")
-    parser.add_argument("--alpha",'-a',type=float,default=1.1,help='set the Alpha which must be more than 1.0')
-    parser.add_argument("--centroids",'-c',type=int, default=3, help='set the amount of centroids')
-    parser.add_argument("--save_path_image",'-o', type=str, default='/home/matteo/github_2/experiments_d1024/without_strategy/5blobs5centers',help='the savepath of plots')
-    parser.add_argument("--c_alpha",'-ca',type=float, default=0.1, help='set the added alpha [0.1,1]')
-    parser.add_argument("--freq",'-f', type=int, default=1,help='set the frequent')
-    parser.add_argument("--seed",'-s', type=int, default=30,help='the random_state of blobs')
+    parser.add_argument("--alpha",'-a',type=float,default=1.14,help='set the Alpha which must be more than 1.0')
+    parser.add_argument("--centroids",'-c',type=int, default=5, help='set the amount of centroids')
+    parser.add_argument("--save_path_image",'-o', type=str, default='/home/matteo/github_2/experiments_d1024/with_strategy/3blobs5centroids/seed_67/',help='the savepath of plots')
+    parser.add_argument("--new_alpha",'-na',type=float, default=0.1, help='set the added alpha [0.1,1]')
+    parser.add_argument("--seed",'-s', type=int, default=67,help='the random_state of blobs')
     parser.add_argument("--temperature", '-t', type=float, default=5, help='set the temperature of softmax')
     args = parser.parse_args()
     return args
@@ -152,15 +151,17 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
         plt.tight_layout()
 
         # 显示图形并保存
-        loss_fig = savepath + f"seed_{seed_}_loss_alpha_{alpha}.png"
+        loss_fig = savepath + f"seed_{seed_}_loss_alpha_{alpha}_new_alpha_{c_alpha}_T_{temp}.png"
         plt.savefig(loss_fig)
         plt.close()
 
-        csv_filename = f'/home/matteo/github_2/experiments_d1024/without_strategy/5blobs3centroids/all_scores_5blobs_3centroids.csv'
-        blob_fig = savepath + f"seed_{seed_}_blob_alpha_{alpha}.png"
+        csv_filename = f'/home/matteo/github_2/experiments_d1024/with_strategy/5blobs5centroids/seed_51/all_scores_5blobs_5centroids.csv'
+        blob_fig = savepath + f"seed_{seed_}_blob_alpha_{alpha}_new_alpha_{c_alpha}_T_{temp}.png"
 
         all_para = {"alpha":alpha,
+                    "new_alpha":c_alpha,
                     "seed":seed_,
+                    "Temp":temp,
                     "acc":acc,
                     "silhouette_score":silhouette_score_, 
                     "davies_index":davies_index,
@@ -234,7 +235,7 @@ def plot_predictions(y_pred, X, C, save_path,alpha,c_alpha,centroids,temp,acc,
     plt.axis('auto')
     plt.xticks(())
     plt.yticks(())
-#    plt.title(f'A:{alpha},  C:{centroids},  C_A:{c_alpha},   T:{temp},')
+    # plt.title(f'A:{alpha},  C:{centroids},  C_A:{c_alpha},   T:{temp},')
     plt.text(0.5, -0.08, f'Acc:{acc}  Silhouette:{silhouette_score_}  Davies:{davies_index} Adjusted:{adjusted_score} \n Normalized:{normalized_score} Homogeneity:{homogeneity_score} Completeness: {completeness_score}V_measure:{v_measure_score_}', 
              ha='center', va='center', transform=plt.gca().transAxes)
     if save_path:
@@ -287,6 +288,27 @@ def main(args):
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
               device=device)
+        if (epoch)%1 == 0:
+            print('.',end='\r')
+            pred,_,_ = evaluate(model=model,
+              dataloader=(X_train,y_train),
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              device=device,
+              epoch=epoch,
+              savepath=args.save_path_image,
+              full=False)
+            if epoch > 50 and (epoch+1)%10 == 0: 
+               with torch.no_grad(): 
+                    # print(pred)
+                    print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
+                    freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
+                    freq = F.softmax(torch.tensor(freq), dim=-1)
+                    freq = freq.numpy()
+                    criterion_cluster.alpha = (criterion_cluster.alpha-1)*(1-args.new_alpha) 
+                    criterion_cluster.alpha += (torch.tensor(freq).float()*args.new_alpha).to(device)
+                    criterion_cluster.alpha += 1
+                    print(criterion_cluster.alpha)
 
     evaluate(model=model,
               dataloader=(X_train,y_train),
@@ -321,7 +343,7 @@ def main(args):
               is_save=True,
               alpha=args.alpha,
               centroids=args.centroids,
-              c_alpha=args.c_alpha,
+              c_alpha=args.new_alpha,
               temp=args.temperature,
               seed_=args.seed,
               cm_loss_list = cm_loss_list
