@@ -12,10 +12,12 @@ seeds_3blobs = [100, 139, 175, 26, 77, 101, 141, 176, 29, 78, 103, 142, 179, 31,
 170, 21, 70, 133, 172, 23, 71, 138, 174, 24, 75]
 seeds = [7, 10, 17, 20, 148, 31, 161, 38, 167, 170, 174, 51, 189, 192, 67, 70, 75, 79, 100, 101, 103, 104, 105, 113, 116, 119]
 alpha_list = [1.02,1.04,1.06,1.08,1.10,1.12,1.14,1.16,1.18,1.20]
+selected_seed_55 = [7,10,20,67,116,119,161,167,170,192]
+selected_seed_35 = [17,51,75,100,101,104,116,161,170,192]
 seeds_51 = [67]
-for seed in seeds:
+for seed in seeds_51:
     for alpha in alpha_list:
-        output_path = f'/home/matteo/github_2/experiments_d1024/without_strategy/5blobs3centroids/seed_{seed}/'
+        output_path = f'/home/matteo/github_2/experiments_d1029/without_strategy/3blobs5centroids/seed_{seed}/'
         if not os.path.exists(output_path):
             os.makedirs(output_path)
         command = ['python', python_script, '-a', alpha,'-s', seed, '-o', output_path]
