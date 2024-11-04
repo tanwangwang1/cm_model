@@ -18,7 +18,13 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
 import argparse
-from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
+from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_score, completeness_score, v_measure_score,homogeneity_completeness_v_measure
+
+import umap
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
 BETA = 200.
 def parse_arguments():
     """
@@ -62,7 +68,7 @@ def train(
         ):
     # switch to train mode
     model.train()
-
+    cm_loss_list = []
     for i, (images, _) in enumerate(dataloader):
 
         images = images.to(device)
@@ -72,11 +78,19 @@ def train(
         loss_rc = criterion_reconst(images, tx)
         loss_cm = criterion_cluster(cm)
         loss = loss_rc * BETA + loss_cm
-        
+        loss_rc_weighted = loss_rc * BETA
+        total_loss = loss_rc_weighted + loss_cm
+        cm_loss_list.append({
+            'total_loss': total_loss.detach().item(),
+            'reconstruction_loss': loss_rc.detach().item(),
+            'weighted_reconstruction_loss': loss_rc_weighted.detach().item(),
+            'clustering_loss': loss_cm.detach().item(),
+        })
         # compute gradient and do GD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    return cm_loss_list
 
 def evaluate(
             model,
@@ -89,7 +103,6 @@ def evaluate(
             full=True,
             is_save=False, 
             alpha=None, 
-            centroids=None, 
             new_alpha=None, 
             temp=None,
             cm_loss_list=None
@@ -97,16 +110,24 @@ def evaluate(
     model.eval()
 
     pred,lbl,img = [],[],None
+    all_gamma = []
+    all_lbl = []
+    all_pred = []
     for i, (images, labels) in enumerate(dataloader):
         #import pdb;pdb.set_trace()
-        if i == 0 or full:
-            img = images.to(device)
-            tx, cm = model(img)
-            _,gamma,_,_ = cm
-            pred += gamma.argmax(-1).detach().cpu().tolist()
-            lbl += labels.cpu().tolist()
-            break
-    
+        
+        img = images.to(device)
+        tx, cm = model(img)
+        _,gamma,_,_ = cm
+        pred += gamma.argmax(-1).detach().cpu().tolist()
+        lbl += labels.cpu().tolist()
+        all_gamma.append(gamma.detach().cpu().numpy())
+        all_pred += gamma.argmax(-1).detach().cpu().tolist()
+        all_lbl.extend(labels.cpu().tolist())
+
+    all_gamma_np = np.concatenate(all_gamma, axis=0)
+    all_lbl_np = np.array(all_lbl)
+    all_pred_np = np.array(all_pred)
     pred = np.array(pred)
     lbl = np.array(lbl).astype(int)
     
@@ -124,9 +145,116 @@ def evaluate(
         
     print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
     print('Loss:',a2s( cm_loss ), flush=True)
-    
-    return pred, lbl, cm_loss, rc_loss
 
+
+    umap_embedder = umap.UMAP(n_neighbors=15, random_state=42, metric='euclidean')
+    umap_embeddings = umap_embedder.fit_transform(all_gamma_np)
+    all_lbl = np.array(all_lbl)
+    all_pred = np.array(all_pred)
+    all_gamma_np = np.array(all_gamma_np)
+    # 检查是否保存并绘制 UMAP 嵌入图
+    if is_save:
+        gamma_np = gamma.detach().cpu().numpy()
+        ACC = round(accuracy(all_lbl, all_pred) * 100, 1)
+
+        if gamma_np.shape[0] > 1:
+            SS = round(silhouette_score(all_gamma_np, all_pred), 3)
+            DBI = round(davies_bouldin_score(all_gamma_np, all_pred), 3)
+
+        ARI = round(adjusted_rand_score(all_lbl, all_pred), 3)
+        NMI = round(normalized_mutual_info_score(all_lbl, all_pred), 3)
+        HS = round(homogeneity_score(all_lbl, all_pred), 3)
+        CS = round(completeness_score(all_lbl, all_pred), 3)
+        VM = round(v_measure_score(all_lbl, all_pred), 3)
+
+        print(alpha, new_alpha, temp, ACC,SS,DBI,ARI,NMI,HS,CS,VM)
+        plt.figure()
+        plt.scatter(umap_embeddings[:, 0], umap_embeddings[:, 1], c=all_lbl_np, cmap="Spectral", s=0.1)
+        plt.title(f'UMAP Embedding: Alpha {alpha}; New_alpha {new_alpha}; Temp {temp}')
+        plt.colorbar(label="True Labels")
+        savefig = f"/home/matteo/github_2/clustering_module/Example/experiments_d1101_mnist/umap_final_alpha_{alpha}_new_alpha_{new_alpha}_temp_{temp}.png"
+        plt.savefig(savefig, dpi=300)
+        plt.close()
+        # import pdb;pdb.set_trace()
+        plot_loss_components(cm_loss_list,alpha=alpha,new_alpha=new_alpha,temp=temp)
+        plot_loss_components_old(cm_loss_list,alpha=alpha,new_alpha=new_alpha,temp=temp)
+    return pred, lbl, cm_loss, rc_loss
+def plot_loss_components(cm_loss_list, alpha, new_alpha, temp):
+    # 解包 total_loss, reconstruction_loss 和 clustering_loss
+    total_losses = [item['total_loss'] for item in cm_loss_list]
+    reconstruction_losses = [item['reconstruction_loss'] for item in cm_loss_list]
+    clustering_losses = [item['clustering_loss'] for item in cm_loss_list]
+
+    # 创建一个1行3列的子图
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # 绘制 Reconstruction Loss
+    axs[0].plot(reconstruction_losses, label='Reconstruction Loss', color='orange')
+    axs[0].set_xlabel('Iteration')
+    axs[0].set_ylabel('Reconstruction Loss')
+    axs[0].set_title('Reconstruction Loss over Batches')
+    axs[0].legend()
+
+    # 绘制 Clustering Loss
+    axs[1].plot(clustering_losses, label='Clustering Loss', color='green')
+    axs[1].set_xlabel('Iteration')
+    axs[1].set_ylabel('Clustering Loss')
+    axs[1].set_title('Clustering Loss over Batches')
+    axs[1].legend()
+
+    # 绘制 Total Loss
+    axs[2].plot(total_losses, label='Total Loss', color='blue')
+    axs[2].set_xlabel('Iteration')
+    axs[2].set_ylabel('Total Loss')
+    axs[2].set_title('Total Loss over Batches')
+    axs[2].legend()
+
+    # 调整布局
+    plt.tight_layout()
+    savepath = f"/home/matteo/github_2/clustering_module/Example/experiments_d1102_mnist/alpha_{alpha}_new_alpha_{new_alpha}_temp_{temp}.png"
+    plt.savefig(savepath)
+def plot_loss_components_old(cm_loss_list,alpha,new_alpha,temp):
+    # 解包 total_loss, reconstruction_loss, weighted_reconstruction_loss 和 clustering_loss
+    total_losses = [item['total_loss'] for item in cm_loss_list]
+    reconstruction_losses = [item['reconstruction_loss'] for item in cm_loss_list]
+    weighted_reconstruction_losses = [item['weighted_reconstruction_loss'] for item in cm_loss_list]
+    clustering_losses = [item['clustering_loss'] for item in cm_loss_list]
+
+    # 创建一个2行2列的子图
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # 绘制 Reconstruction Loss
+    axs[0, 0].plot(reconstruction_losses, label='Reconstruction Loss', color='orange')
+    axs[0, 0].set_xlabel('Iteration')
+    axs[0, 0].set_ylabel('Reconstruction Loss')
+    axs[0, 0].set_title('Reconstruction Loss over Batches')
+    axs[0, 0].legend()
+
+    # 绘制 Weighted Reconstruction Loss
+    axs[0, 1].plot(weighted_reconstruction_losses, label='Weighted Reconstruction Loss', color='purple')
+    axs[0, 1].set_xlabel('Iteration')
+    axs[0, 1].set_ylabel('Weighted Reconstruction Loss')
+    axs[0, 1].set_title('Weighted Reconstruction Loss over Batches')
+    axs[0, 1].legend()
+
+    # 绘制 Clustering Loss
+    axs[1, 0].plot(clustering_losses, label='Clustering Loss', color='green')
+    axs[1, 0].set_xlabel('Iteration')
+    axs[1, 0].set_ylabel('Clustering Loss')
+    axs[1, 0].set_title('Clustering Loss over Batches')
+    axs[1, 0].legend()
+
+    # 绘制 Total Loss
+    axs[1, 1].plot(total_losses, label='Total Loss', color='blue')
+    axs[1, 1].set_xlabel('Iteration')
+    axs[1, 1].set_ylabel('Total Loss')
+    axs[1, 1].set_title('Total Loss over Batches')
+    axs[1, 1].legend()
+
+    # 调整布局
+    plt.tight_layout()
+    savepath = f"/home/matteo/github_2/clustering_module/Example/experiments_d1102_mnist/" + f"alpha_{alpha}_new_alpha_{new_alpha}_temp_{temp}_4parts.png" 
+    plt.savefig(savepath)
 def avg_epoch(model,
               dataloader,
               criterion_cluster,
@@ -161,7 +289,7 @@ def avg_epoch(model,
 
 
 def main(args):
-    EPOCH = 200
+    EPOCH = 100
     # Parameters for normalized Loss
     BATCH = 512
     BETA = 200.
@@ -238,9 +366,9 @@ def main(args):
 
     
     ######################################################################################
-
+    cm_loss_list = []
     for epoch in range(EPOCH):
-        train(model=model,
+        cm_loss_list += train(model=model,
               dataloader=train_loader,
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
@@ -257,7 +385,7 @@ def main(args):
                                 epoch=epoch,
                                 criterion_reconst = criterion_reconst,
                                 full=False)
-            if epoch > 100 and (epoch + 1)%10 == 0:
+            if epoch > 50 and (epoch + 1)%10 == 0:
                 with torch.no_grad(): 
                     # print(pred)
                     print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
@@ -306,9 +434,9 @@ def main(args):
             full=True,
             is_save=True, 
             alpha=args.alpha, 
-            centroids=args.centroids, 
             new_alpha=args.new_alpha, 
             temp=args.temperature,
+            cm_loss_list=cm_loss_list
             )
 
 

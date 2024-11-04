@@ -19,6 +19,12 @@ from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
 import argparse
 from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
+
+import umap
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
 BETA = 200.
 def parse_arguments():
     """
@@ -62,7 +68,7 @@ def train(
         ):
     # switch to train mode
     model.train()
-
+    cm_loss_list = []
     for i, (images, _) in enumerate(dataloader):
 
         images = images.to(device)
@@ -72,11 +78,18 @@ def train(
         loss_rc = criterion_reconst(images, tx)
         loss_cm = criterion_cluster(cm)
         loss = loss_rc * BETA + loss_cm
-        
+        loss_rc_weighted = loss_rc * BETA
+        total_loss = loss_rc_weighted + loss_cm
+        cm_loss_list.append({
+            'total_loss': total_loss.detach().item(),
+            'reconstruction_loss': loss_rc.detach().item(),
+            'clustering_loss': loss_cm.detach().item(),
+        })
         # compute gradient and do GD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    return cm_loss_list
 
 def evaluate(
             model,
@@ -89,7 +102,6 @@ def evaluate(
             full=True,
             is_save=False, 
             alpha=None, 
-            centroids=None, 
             new_alpha=None, 
             temp=None,
             cm_loss_list=None
@@ -124,8 +136,83 @@ def evaluate(
         
     print('Rec:{:.6f}'.format( rc_loss * BETA ), end='\t', flush=True)
     print('Loss:',a2s( cm_loss ), flush=True)
+
+    # csv_filename = f"/home/matteo/github_2/clustering_module/Example/experiments_d1031_mnist/alpha_{alpha}_new_alpha_{new_alpha}_temp_{temp}.csv"
+    # all_para = {
+    #     "alpha":alpha,
+    #     "new_alpha":new_alpha,
+    #     "temp":temp,
+    #     "acc":acc,
+    #     "SS":SS,
+    #     "DBI"
+    # }
     
+
+
+    umap_embedder = umap.UMAP(n_neighbors=15, random_state=42, metric='euclidean')
+    umap_embeddings = umap_embedder.fit_transform(gamma.detach().cpu().numpy())
+    if is_save:
+    # 绘制 UMAP 图
+        gamma_np = gamma.detach().cpu().numpy()
+        ACC = round(accuracy( lbl, pred )*100,1)
+        if gamma_np.shape[0] > 1:
+            SS = round(silhouette_score(gamma_np, pred),3)
+            DBI = round(davies_bouldin_score(gamma_np, pred),3)
+        ARI = round(adjusted_rand_score(lbl, pred),3)
+        NMI = round(normalized_mutual_info_score(lbl, pred),3)
+        HS = round(homogeneity_score(lbl, pred),3)
+        CS = round(completeness_score(lbl, pred),3)
+        VM = round(v_measure_score(lbl, pred),3)
+        print(alpha, new_alpha, temp, ACC,SS,DBI,ARI,NMI,HS,CS,VM)
+        plt.figure()
+        plt.scatter(umap_embeddings[:, 0], umap_embeddings[:, 1], c=lbl, cmap="Spectral", s=0.1)
+        plt.title(f'UMAP Embedding: Alpha {alpha}; New_alpha {new_alpha}; Temp {temp}')
+        plt.colorbar()
+        savefig = f"/home/matteo/github_2/clustering_module/Example/experiments_d1031_mnist/" + f"20centroids_alpha_{alpha}_new_alpha_{new_alpha}_temp_{temp}.png"
+        plt.savefig(savefig, dpi=300)
     return pred, lbl, cm_loss, rc_loss
+def plot_loss_components(cm_loss_list):
+    # 解包 total_loss, reconstruction_loss 和 clustering_loss
+    total_losses = [item['total_loss'] for item in cm_loss_list]
+    reconstruction_losses = [item['reconstruction_loss'] for item in cm_loss_list]
+    clustering_losses = [item['clustering_loss'] for item in cm_loss_list]
+
+    # 创建一个4行1列的子图
+    fig, axs = plt.subplots(4, 1, figsize=(10, 16))
+    
+    # 绘制 Total Loss
+    axs[0].plot(total_losses, label='Total Loss', color='blue')
+    axs[0].set_xlabel('Batch')
+    axs[0].set_ylabel('Total Loss')
+    axs[0].set_title('Total Loss over Batches')
+    axs[0].legend()
+
+    # 绘制 Reconstruction Loss
+    axs[1].plot(reconstruction_losses, label='Reconstruction Loss', color='orange')
+    axs[1].set_xlabel('Batch')
+    axs[1].set_ylabel('Reconstruction Loss')
+    axs[1].set_title('Reconstruction Loss over Batches')
+    axs[1].legend()
+
+    # 绘制 Clustering Loss
+    axs[2].plot(clustering_losses, label='Clustering Loss', color='green')
+    axs[2].set_xlabel('Batch')
+    axs[2].set_ylabel('Clustering Loss')
+    axs[2].set_title('Clustering Loss over Batches')
+    axs[2].legend()
+
+    # 绘制所有损失在同一图中
+    axs[3].plot(total_losses, label='Total Loss', color='blue')
+    axs[3].plot(reconstruction_losses, label='Reconstruction Loss', color='orange')
+    axs[3].plot(clustering_losses, label='Clustering Loss', color='green')
+    axs[3].set_xlabel('Batch')
+    axs[3].set_ylabel('Loss Value')
+    axs[3].set_title('All Losses over Batches')
+    axs[3].legend()
+
+    # 调整布局
+    plt.tight_layout()
+    plt.savefig("./a.png")
 
 def avg_epoch(model,
               dataloader,
@@ -161,7 +248,7 @@ def avg_epoch(model,
 
 
 def main(args):
-    EPOCH = 200
+    EPOCH = 2
     # Parameters for normalized Loss
     BATCH = 512
     BETA = 200.
@@ -238,9 +325,9 @@ def main(args):
 
     
     ######################################################################################
-
+    cm_loss_list = []
     for epoch in range(EPOCH):
-        train(model=model,
+        cm_loss_list += train(model=model,
               dataloader=train_loader,
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
@@ -257,7 +344,7 @@ def main(args):
                                 epoch=epoch,
                                 criterion_reconst = criterion_reconst,
                                 full=False)
-            if epoch > 100 and (epoch + 1)%10 == 0:
+            if epoch > 50 and (epoch + 1)%10 == 0:
                 with torch.no_grad(): 
                     # print(pred)
                     print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
@@ -306,9 +393,9 @@ def main(args):
             full=True,
             is_save=True, 
             alpha=args.alpha, 
-            centroids=args.centroids, 
             new_alpha=args.new_alpha, 
             temp=args.temperature,
+            cm_loss_list = cm_loss_list
             )
 
 
