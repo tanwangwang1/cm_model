@@ -13,7 +13,6 @@ from sklearn.metrics import homogeneity_score as homog
 from sklearn.preprocessing import StandardScaler
 from sklearn import cluster, datasets
 from sklearn.model_selection import train_test_split
-#from custom_dataset import CustomDataset
 import argparse
 import pandas as pd
 import os
@@ -31,7 +30,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Blobs_example")
     parser.add_argument("--alpha",'-a',type=float,default=1.1,help='set the Alpha which must be more than 1.0')
     parser.add_argument("--centroids",'-c',type=int, default=5, help='set the amount of centroids')
-    parser.add_argument("--save_path_image",'-o', type=str, default='/home/matteo/github_2/blobs/center5',help='the savepath of plots')
+    parser.add_argument("--save_path_image",'-o', type=str, default='/home/matteo/github_2/experiments_d1024/without_strategy/5blobs5centers',help='the savepath of plots')
     parser.add_argument("--c_alpha",'-ca',type=float, default=0.1, help='set the added alpha [0.1,1]')
     parser.add_argument("--freq",'-f', type=int, default=1,help='set the frequent')
     parser.add_argument("--seed",'-s', type=int, default=30,help='the random_state of blobs')
@@ -78,8 +77,7 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
              savepath=None,full=False,
              is_save=False, alpha=None, 
              centroids=None, c_alpha=None, 
-             temp=None, seed_=None,
-             cm_loss_list=None):
+             temp=None, seed_=None,cm_loss_list=None):
     model.eval()
     pred,lbl,x = [],[],None
     X_all = []
@@ -108,8 +106,73 @@ def evaluate(model,dataloader,criterion_cluster,optimizer,device, epoch,
     print('Loss:',a2s( cm_loss ), flush=True)
     import time
     if is_save:
-        save_path = savepath + f"/seed_{seed_}.png"
-        plot_predictions(pred[:],X_all,model._mu().detach().cpu().numpy(), save_path,seed=seed_)
+        silhouette_score_ = round(silhouette_score(X_all, pred), 3)
+        davies_index = round(davies_bouldin_score(X_all, pred), 3)
+
+        acc = round(accuracy( lbl, pred ),3)
+        labels_true= np.array([tensor.numpy().flatten() for tensor in y_all])
+        adjusted_score = round(adjusted_rand_score(labels_true.flatten(), pred),3)
+        normalized_score  = round(normalized_mutual_info_score(labels_true.flatten(), pred), 3)
+        homogeneity_score_ = homogeneity_completeness_v_measure(labels_true.flatten(), pred)
+        homogeneity_score = round(homogeneity_score_[0], 3)
+        completeness_score = round(homogeneity_score_[1],3)
+        v_measure_score = round(homogeneity_score_[2],3)
+
+        cm_loss_1, cm_loss_2, cm_loss_3, cm_loss_4 = zip(*cm_loss_list)
+        cm_loss_1 = np.array(cm_loss_1)
+        cm_loss_2 = np.array(cm_loss_2)
+        cm_loss_3 = np.array(cm_loss_3)
+        cm_loss_4 = np.array(cm_loss_4)
+        # 准备X轴数据（Epoch）
+        epochs = np.arange(1, len(cm_loss_1) + 1)
+        fig, axs = plt.subplots(2, 2, figsize=(16, 8))  # 2行2列
+
+        # 定义损失数组、标题、颜色和y轴范围
+        losses = [
+            (cm_loss_1, 'Loss 1', 'blue', (0, 1.1)),
+            (cm_loss_2, 'Loss 2', 'orange', (0, 0.4)),
+            (cm_loss_3, 'Loss 3', 'green', (-0.4, 0.02)),
+            (cm_loss_4, 'Loss 4', 'red', (0.8, 1.4))
+        ]
+
+        # 将axs转换为1D数组，方便迭代处理
+        axs = axs.flatten()
+
+        # 遍历每个子图并绘制对应的损失曲线
+        for ax, (loss, title, color, (y_min, y_max)) in zip(axs, losses):
+            ax.plot(epochs, loss, color=color, linestyle='-')
+            ax.set_title(title, fontsize=14)
+            ax.set_xlabel('Iterations', fontsize=18)
+            ax.set_ylabel('Losses', fontsize=18)
+            ax.set_ylim([y_min, y_max])  # 为每个子图设置不同的y轴区间
+            #ax.grid(True)
+            ax.tick_params(axis='both', which='major', labelsize=16)  # 设置主刻度标签字体大小
+            ax.tick_params(axis='both', which='minor', labelsize=16)  # 设置次刻度标签字体大小
+
+        # 调整子图之间的间距
+        plt.tight_layout()
+        loss_fig = savepath + f"seed_{seed_}_loss_alpha_{alpha}.png"
+        plt.savefig(loss_fig)
+        plt.close()
+
+        csv_filename = f'/home/matteo/github_2/experiments_d1104/without_strategy/5blobs5centroids/all_scores_5blobs_5centroids.csv'
+        blob_fig = savepath + f"seed_{seed_}_blob_alpha_{alpha}.png"
+
+        all_para = {"alpha":alpha,
+                    "seed":seed_,
+                    "acc":acc,
+                    "silhouette_score":silhouette_score_, 
+                    "davies_index":davies_index,
+                    "adjusted_score":adjusted_score, 
+                    "normalized_score":normalized_score,
+                    "homogeneity_score":homogeneity_score,
+                    "completeness_score":completeness_score,
+                    "v_measure_score":v_measure_score}
+        df_new = pd.DataFrame(all_para,index=[0])
+        df_new.to_csv(csv_filename, mode='a', header=False, index=False)
+        plot_predictions(pred[:],X_all,model._mu().detach().cpu().numpy(), blob_fig, alpha,c_alpha, centroids,temp,acc, 
+                            silhouette_score_, davies_index, adjusted_score, 
+                            normalized_score, homogeneity_score, completeness_score, v_measure_score)
     return pred, lbl, cm_loss
 
 def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
@@ -137,7 +200,11 @@ def avg_epoch(model,dataloader,criterion_cluster,optimizer,device):
 
 ######################################################################################
 
-def plot_predictions(y_pred, X, C, save_path, seed):
+def plot_predictions(y_pred, X, C, save_path,alpha,c_alpha,centroids,temp,acc, 
+                     silhouette_score_, davies_index, adjusted_score, 
+                     normalized_score, homogeneity_score, completeness_score, 
+                     v_measure_score_):
+    
     colors = np.array(
         list(
             islice(
@@ -166,9 +233,12 @@ def plot_predictions(y_pred, X, C, save_path, seed):
     plt.axis('auto')
     plt.xticks(())
     plt.yticks(())
-    plt.title(f'seed:{seed}')
+    plt.text(0.5, -0.08, f'ACC:{acc}  SS:{silhouette_score_}  DBI:{davies_index} ARI:{adjusted_score} \n NMI:{normalized_score} HS:{homogeneity_score} CS: {completeness_score}VM:{v_measure_score_}', 
+             ha='center', va='center', transform=plt.gca().transAxes,fontsize=18)
     if save_path:
         plt.savefig(save_path)
+    else:
+        plt.show()
 
 
 def main(args):
@@ -208,54 +278,35 @@ def main(args):
         betas=(.9,.999),
         eps=1e-3
     )
-    # cm_loss_list = []
-    # for epoch in range(EPOCH):
-    #     cm_loss_list += train(model=model,
-    #           dataloader=(X_train,y_train),
-    #           criterion_cluster=criterion_cluster,
-    #           optimizer=optimizer,
-    #           device=device)
+    cm_loss_list = []
+    for epoch in range(EPOCH):
+        cm_loss_list += train(model=model,
+              dataloader=(X_train,y_train),
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              device=device)
 
-    #     if (epoch)%1 == 0:
-    #         print('.',end='\r')
-    #         pred,_,_ = evaluate(model=model,
-    #           dataloader=(X_train,y_train),
-    #           criterion_cluster=criterion_cluster,
-    #           optimizer=optimizer,
-    #           device=device,
-    #           epoch=epoch,
-    #           savepath=args.save_path_image,
-    #           full=False)
-    #         if (epoch+1)%10 == 0: 
-    #             with torch.no_grad(): 
-    #                 print(pred)
-    #                 freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
-    #                 freq = F.softmax(torch.tensor(freq), dim=-1)
-    #                 freq = freq.numpy()
-    #                 criterion_cluster.alpha = criterion_cluster.alpha*args.c_alpha + (torch.tensor(freq+1).float()*(1 - args.c_alpha)).to(device)
-    #                 print(criterion_cluster.alpha)
-
-    # evaluate(model=model,
-    #           dataloader=(X_train,y_train),
-    #           criterion_cluster=criterion_cluster,
-    #           optimizer=optimizer,
-    #           epoch=EPOCH,
-    #           device=device,
-    #           full=False)
-    # print('>>> End Training')
-    # evaluate(model=model,
-    #           dataloader=(X_train,y_train),
-    #           criterion_cluster=criterion_cluster,
-    #           optimizer=optimizer,
-    #           device=device,
-    #           full=True,
-    #           epoch=EPOCH,)
-    # print('>>> Average Epoch')
-    # avg_epoch(model=model,
-    #           dataloader=(X_train,y_train),
-    #           criterion_cluster=criterion_cluster,
-    #           optimizer=optimizer,
-    #           device=device)
+    evaluate(model=model,
+              dataloader=(X_train,y_train),
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              epoch=EPOCH,
+              device=device,
+              full=False)
+    print('>>> End Training')
+    evaluate(model=model,
+              dataloader=(X_train,y_train),
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              device=device,
+              full=True,
+              epoch=EPOCH,)
+    print('>>> Average Epoch')
+    avg_epoch(model=model,
+              dataloader=(X_train,y_train),
+              criterion_cluster=criterion_cluster,
+              optimizer=optimizer,
+              device=device)
 
     evaluate(model=model,
               dataloader=(X_train,y_train),
@@ -271,7 +322,7 @@ def main(args):
               c_alpha=args.c_alpha,
               temp=args.temperature,
               seed_=args.seed,
-              cm_loss_list=None
+              cm_loss_list = cm_loss_list
               )
     
 
