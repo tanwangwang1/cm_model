@@ -4,22 +4,22 @@
 
 
 new_alpha=0.10
-temperature=60
+temperature=10
 
-# savefile="/home/matteo/github_2/clustering_module/Example/experiments_d1103_mnist/alpha_1.04_new_alpha_${new_alpha}_temp_${temperature}.txt"
-# python3 cm_mnist_latest_d1102.py  -n $new_alpha -t $temperature > $savefile
+savefile="/home/matteo/github_2/experiments_d1104/mnist_odd/alpha_1.04_new_alpha_${new_alpha}_temp_${temperature}.txt"
+python3 cm_mnist_latest_d1102_odd.py  -n $new_alpha -t $temperature > $savefile
 
-while [ $(echo "$temperature< 110" | bc) -eq 1 ]; do
-  new_alpha=0.10
-  # while [ $(echo "$new_alpha< 0.5" | bc) -eq 1 ]; do
-      # 调用 Python 脚本
-    savefile="/home/matteo/github_2/clustering_module/Example/experiments_d11040_mnist/alpha_1.04_new_alpha_${new_alpha}_temp_${temperature}.txt"
-    python3 cm_mnist_latest_d1102_odd.py  -n $new_alpha -t $temperature > $savefile
-      # 增加 t 参数值
-  #     new_alpha=$(echo "$new_alpha + 0.1" | bc)
-  # done
-  temperature=$(echo "$temperature + 10" | bc)
-done 
+# while [ $(echo "$new_alpha< 0.5" | bc) -eq 1 ]; do
+#   temperature=10
+#   while [ $(echo "$temperature< 60" | bc) -eq 1 ]; do
+#     #调用 Python 脚本
+#     savefile="/home/matteo/github_2/experiments_d1104/mnist_odd/alpha_1.04_new_alpha_${new_alpha}_temp_${temperature}.txt"
+#     python3 cm_mnist_latest_d1102_odd.py  -n $new_alpha -t $temperature > $savefile
+#     # 增加 t 参数值
+#     temperature=$(echo "$temperature + 10" | bc)
+#   done
+#   new_alpha=$(echo "$new_alpha + 0.1" | bc)
+# done 
 
 
 
