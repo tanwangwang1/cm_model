@@ -1,3 +1,17 @@
+import os,sys,time,copy
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'#sys.argv[-1] if sys.argv[-1].isdigit() else '0'
+import numpy as np
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torch.nn.functional as F
+from lib_CM import *
+import warnings
+warnings.filterwarnings('ignore')
+from scipy.optimize import linear_sum_assignment
+from sklearn.metrics import homogeneity_score as homog
+from torch.utils.data import Subset
 class View(nn.Module):
     def __init__(self, shape):
         super().__init__()
@@ -7,7 +21,7 @@ class View(nn.Module):
         return x.view(*self.shape)
 
 class CV_CM(nn.Module):
-  def __init__(self):
+  def __init__(self, LATENT,N_CLUSTER):
     super().__init__()
 
 
@@ -22,11 +36,11 @@ class CV_CM(nn.Module):
 
         nn.Flatten(),
 
-        nn.Linear(7 * 7 * 64, LATENT*2),
+        nn.Linear(7 * 7 * 64, 128),
         # nn.Dropout(p=0.5),
         nn.ReLU(),
 
-        nn.Linear(LATENT*2, LATENT)
+        nn.Linear(128, LATENT)
     )
 
     self.decoder = nn.Sequential(
@@ -51,7 +65,7 @@ class CV_CM(nn.Module):
         nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
     )
 
-    self.cm = Clustering_Module( LATENT, 10, False)
+    self.cm = Clustering_Module(LATENT, N_CLUSTER, False)
 
   def forward(self, x):
     z = self.encoder(x)

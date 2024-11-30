@@ -1,14 +1,15 @@
 import os,sys,time,copy
-os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[-1] if sys.argv[-1].isdigit() else '0'
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'#sys.argv[-1] if sys.argv[-1].isdigit() else '0'
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+import torch.nn.functional as F
 
 from lib_CM import *
-
+from cv_cm import *
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -16,7 +17,24 @@ warnings.filterwarnings('ignore')
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import homogeneity_score as homog
 from torch.utils.data import Subset
-BETA = 100.
+import argparse
+from sklearn.metrics import silhouette_score,davies_bouldin_score, adjusted_rand_score, normalized_mutual_info_score, homogeneity_completeness_v_measure
+BETA = 200.
+def parse_arguments():
+    """
+    build and analyse the parameters of command
+    return the parser(parameter object)
+    """
+    parser = argparse.ArgumentParser(description="Mnist_example")
+    parser.add_argument("--alpha",'-a',type=float,default=1.04,help='set the alpha which must be more than 1.0')
+    parser.add_argument("--centroids",'-c',type=int, default=20, help='set the amount of centroids')
+    parser.add_argument("--new_alpha",'-n',type=float, default=.1, help='set the added alpha [0.1,1], rename as new_alpha')
+    parser.add_argument("--temperature", '-t', type=float, default=20, help='set the temperature of softmax')
+    parser.add_argument("--save_csv",'-o', type=str, default='./',help='the savepath of csv')
+    args = parser.parse_args()
+    return args
+
+
 def accuracy(y_true, y_pred):
     assert y_pred.shape[0] == y_true.shape[0]
         
@@ -33,74 +51,7 @@ def a2s(array,p=3):
 
 def i2s(array,p=3): 
     return str( [str(x) for x in array] )[1:-1].replace("'",'') 
-
-
 ##########################################################################
-
-class View(nn.Module):
-    def __init__(self, shape):
-        super().__init__()
-        self.shape = shape,  # extra comma
-
-    def forward(self, x):
-        return x.view(*self.shape)
-
-class CV_CM(nn.Module):
-  def __init__(self, LATENT):
-    super().__init__()
-
-
-    self.encoder = nn.Sequential(
-        nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-
-        nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-
-        nn.Flatten(),
-
-        nn.Linear(7 * 7 * 64, LATENT*2),
-        # nn.Dropout(p=0.5),
-        nn.ReLU(),
-
-        nn.Linear(LATENT*2, LATENT)
-    )
-
-    self.decoder = nn.Sequential(
-        nn.Linear(LATENT, 128),
-        nn.ReLU(),
-
-        nn.Linear(128, 7 * 7 * 64),
-
-        View((-1,64,7,7)),
-
-        nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        #
-        nn.UpsamplingBilinear2d(scale_factor=2),
-        #
-
-        nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
-        nn.ReLU(),
-        nn.UpsamplingBilinear2d(scale_factor=2),
-        #
-
-        nn.ConvTranspose2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1),
-    )
-
-    self.cm = Clustering_Module(LATENT, 5, False)
-
-  def forward(self, x):
-    z = self.encoder(x)
-    tx = self.decoder(z)
-    cm = self.cm(z) # NxC, NxK, NxC, KxC
-
-    return tx, cm
-
-######################################################################################
-
 def train(
         model,
         dataloader,
@@ -111,7 +62,7 @@ def train(
         ):
     # switch to train mode
     model.train()
-    
+
     for i, (images, _) in enumerate(dataloader):
 
         images = images.to(device)
@@ -127,19 +78,27 @@ def train(
         loss.backward()
         optimizer.step()
 
-def evaluate(model,
-              dataloader,
-              criterion_cluster,
-              optimizer,
-              device,
-              epoch,
-              criterion_reconst,
-              full=True,
-              ):
+def evaluate(
+            model,
+            dataloader,
+            criterion_cluster,
+            optimizer,
+            device,
+            epoch,
+            criterion_reconst,
+            full=True,
+            is_save=False, 
+            alpha=None, 
+            centroids=None, 
+            new_alpha=None, 
+            temp=None,
+            cm_loss_list=None
+            ):
     model.eval()
 
     pred,lbl,img = [],[],None
     for i, (images, labels) in enumerate(dataloader):
+        #import pdb;pdb.set_trace()
         if i == 0 or full:
             img = images.to(device)
             tx, cm = model(img)
@@ -201,35 +160,20 @@ def avg_epoch(model,
     model.load_state_dict(weights)
 
 
-
-def filter_by_labels(dataset, labels):
-    indices = [i for i, (_, label) in enumerate(dataset) if label in labels]
-    return Subset(dataset, indices)
-def main():
-    EPOCH = 100
-
-    """
-    # Parameters for non-normalized Loss
-    BATCH = 500
-    ALPHA = 230
-    BETA = 5.
-    LBD = 1.
-    """
-
+def main(args):
+    EPOCH = 200
     # Parameters for normalized Loss
-    BATCH = 1024
-    ALPHA = 1.1
-    BETA = 100.
+    BATCH = 512
+    BETA = 200.
     LBD = .1
 
-    print( BATCH, ALPHA, BETA, LBD )
+    print( BATCH, args.alpha, BETA, LBD )
     ######################################################################################
-    torch.cuda.set_device(0)
-
+    #torch.cuda.set_device(0)
 
 
     # Define which digits to keep
-    allowed_labels = set(range(5))
+    #allowed_labels = set(range(5))
 
     # load data
     train_dataset = datasets.MNIST(
@@ -251,8 +195,8 @@ def main():
         download=False,
     )
 
-    train_dataset = filter_by_labels(train_dataset, allowed_labels)
-    test_dataset = filter_by_labels(test_dataset, allowed_labels)
+    # train_dataset = filter_by_labels(train_dataset, allowed_labels)
+    # test_dataset = filter_by_labels(test_dataset, allowed_labels)
 
 
     train_loader = torch.utils.data.DataLoader(
@@ -266,30 +210,33 @@ def main():
     test_loader = torch.utils.data.DataLoader(
         test_dataset, 
         batch_size=max(BATCH,1024), 
+        shuffle=True, 
         num_workers=8, 
         drop_last=False
     ) #, pin_memory=True)
 ################################################################################
     # create model
-    model = CV_CM(2).cuda(0)
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    criterion_reconst = nn.MSELoss(reduction=('mean')).cuda(0)
+    model = CV_CM(10,args.centroids).to(device)
+
+    criterion_reconst = nn.MSELoss(reduction=('mean')).to(device)
     criterion_cluster = Clustering_Module_Loss(
-                            num_clusters=5, 
-                            alpha=ALPHA, 
-                            lbd=0,  # lbd == 0 
-                            orth=False, # True ==> False 
-                            normalize=True).cuda(0)
+                            num_clusters=args.centroids, 
+                            alpha=args.alpha, 
+                            lbd=1e-4,  # lbd == 0 
+                            orth=True, # True ==> False 
+                            normalize=True).to(device)
 
     optim_params = model.parameters()
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=1e-3, 
-        betas=(.9,.999), 
-        eps=1e-3 
+        # betas=(.9,.999), 
+        # eps=1e-3 
     )
 
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
     ######################################################################################
 
     for epoch in range(EPOCH):
@@ -299,29 +246,33 @@ def main():
               optimizer=optimizer,
               criterion_reconst=criterion_reconst,
               device=device)
-        
-        if (epoch)%10 == 0:
+
+        if (epoch)%1 == 0:
             print('.',end='\r')
-            evaluate(model=model,
-                        dataloader=train_loader,
-                        criterion_cluster=criterion_cluster,
-                        optimizer=optimizer,
-                        device=device,
-                        epoch=epoch,
-                        criterion_reconst = criterion_reconst,
-                        full=False)
-        if (epoch)%50 == 0:
-            print( BATCH, ALPHA, BETA, LBD )
-            # with torch.no_grad(): 
-            #     print(pred)
-            #     # freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
-            #     # freq = F.softmax(torch.tensor(freq), dim=-1)
-            #     # freq = freq.numpy()
-            #     # criterion_cluster.alpha = criterion_cluster.alpha*args.c_alpha + (torch.tensor(freq+1).float()*(1 - args.c_alpha)).to(device)
-            #     # print(criterion_cluster.alpha)
+            pred,_,_,_ = evaluate(model=model,
+                                dataloader=test_loader,
+                                criterion_cluster=criterion_cluster,
+                                optimizer=optimizer,
+                                device=device,
+                                epoch=epoch,
+                                criterion_reconst = criterion_reconst,
+                                full=False)
+            if epoch > 100 and (epoch + 1)%10 == 0:
+                with torch.no_grad(): 
+                    # print(pred)
+                    print( 'UPDATE ALPHA', criterion_cluster.alpha, end=' -> ')
+                    freq = np.bincount( pred.astype(int), minlength=args.centroids ).astype(float) / args.temperature
+                    freq = F.softmax(torch.tensor(freq), dim=-1)
+                    freq = freq.numpy()
+                    criterion_cluster.alpha = (criterion_cluster.alpha-1)*(1-args.new_alpha) 
+                    criterion_cluster.alpha += (torch.tensor(freq).float()*args.new_alpha).to(device)
+                    criterion_cluster.alpha += 1
+                    #criterion_cluster.alpha = torch.clamp(criterion_cluster.alpha, min=1.01)
+                    print(criterion_cluster.alpha)
+
 
     evaluate(model=model,
-              dataloader=train_loader,
+              dataloader=test_loader,
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
               epoch=EPOCH,
@@ -330,7 +281,7 @@ def main():
               full=False)
     print('>>> End Training')
     evaluate(model=model,
-              dataloader=train_loader,
+              dataloader=test_loader,
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
               criterion_reconst = criterion_reconst,
@@ -339,22 +290,29 @@ def main():
               epoch=EPOCH)
     print('>>> Average Epoch')
     avg_epoch(model=model,
-              dataloader=train_loader,
+              dataloader=test_loader,
               criterion_cluster=criterion_cluster,
               optimizer=optimizer,
               criterion_reconst = criterion_reconst,
               device=device)
-    evaluate(model=model,
-              dataloader=train_loader,
-              criterion_cluster=criterion_cluster,
-              optimizer=optimizer,
-              criterion_reconst = criterion_reconst,
-              device=device,
-              epoch=EPOCH,
-              full=True,
-              )
+    evaluate(
+            model=model,
+            dataloader=test_loader,
+            criterion_cluster=criterion_cluster,
+            optimizer=optimizer,
+            criterion_reconst = criterion_reconst,
+            device=device,
+            epoch=EPOCH,
+            full=True,
+            is_save=True, 
+            alpha=args.alpha, 
+            centroids=args.centroids, 
+            new_alpha=args.new_alpha, 
+            temp=args.temperature,
+            )
 
 
 
 if __name__=='__main__':
-    main()
+    args = parse_arguments()
+    main(args)
